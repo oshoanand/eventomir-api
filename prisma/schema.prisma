@@ -1,0 +1,423 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  CANCELLED_BY_CUSTOMER
+}
+
+enum NotificationType {
+  BOOKING_REQUEST
+  BOOKING_UPDATE
+  SYSTEM
+}
+
+enum SubscriptionTier {
+  FREE
+  STANDARD
+  PREMIUM
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id                          String    @id @default(cuid())
+  email                       String    @unique
+  password                    String
+  name                        String?
+  phone                       String?
+  city                        String?
+  profile_picture             String?
+  registration_date           DateTime  @default(now())
+  role                        String    @default("customer")
+  account_type                String?
+  company_name                String?
+  inn                         String?
+  description                 String?
+  background_picture          String?
+  roles                       String[]
+  price_range                 Int[]
+  latitude                    Float?
+  longitude                   Float?
+  subscription_plan_id        String?   @default("econom")
+  subscription_end_date       DateTime?
+  moderation_status           String    @default("pending_approval")
+  parent_agency_id            String?
+  sub_profile_ids             String[]
+  created_at                  DateTime  @default(now())
+  updated_at                  DateTime  @updatedAt
+  profile_picture_alt_text    String?
+  background_picture_alt_text String?
+  profile_meta_title          String?
+  profile_meta_description    String?
+  profile_keywords            String?
+  details                     Json?
+  status                      String?   @default("active")
+  emailVerified               DateTime?
+  experience                  String?
+  resetPasswordToken          String?
+  resetPasswordExpires        DateTime?
+  favorite_performers         Json?
+
+  // Fields for Partner role
+  balance         Float?
+  total_earned    Float?
+  referral_id     String? @unique
+  payment_details String?
+
+  reviews_written               Review[]               @relation("CustomerReviews")
+  reviews_received              Review[]               @relation("PerformerReviews")
+  bookings_as_customer          Booking[]              @relation("CustomerBookings")
+  bookings_as_performer         Booking[]              @relation("PerformerBookings")
+  paid_requests                 PaidRequest[]
+  gallery_items                 GalleryItem[]
+  sent_messages                 Message[]
+  support_requests_as_requester SupportRequest[]       @relation("RequesterSupport")
+  support_requests_as_manager   SupportRequest[]       @relation("ManagerSupport")
+  referral_events_as_partner    ReferralEvent[]        @relation("PartnerReferral")
+  referral_events_as_referred   ReferralEvent[]        @relation("ReferredUser")
+  favorites_given               Favorite[]             @relation("CustomerFavorites")
+  favorites_received            Favorite[]             @relation("PerformerFavorites")
+  certificates                  Certificate[]
+  recommendation_letters        RecommendationLetter[]
+  prompts                       Prompt[]
+  notifications                 Notification[]
+  payout_requests               PayoutRequest[]
+  subscription                  UserSubscription?
+  payments                      Payment[]
+  accounts                      Account[]
+  sessions                      Session[]
+  verificationTokens            VerificationToken[]
+
+  parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sub_agencies  User[] @relation("SubAgencies")
+  chats         Chat[]
+}
+
+model Review {
+  id            String   @id @default(cuid())
+  performer_id  String
+  customer_id   String
+  customer_name String
+  rating        Int
+  comment       String?
+  created_at    DateTime @default(now())
+
+  performer User @relation("PerformerReviews", fields: [performer_id], references: [id])
+  customer  User @relation("CustomerReviews", fields: [customer_id], references: [id])
+}
+
+model Booking {
+  id      String        @id @default(uuid())
+  date    DateTime
+  details String?
+  status  BookingStatus @default(PENDING)
+
+  // Relations
+  customerId String
+  customer   User   @relation("CustomerBookings", fields: [customerId], references: [id])
+
+  performerId String
+  performer   User   @relation("PerformerBookings", fields: [performerId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  Payment   Payment[]
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  type      NotificationType // e.g., BOOKING_REQUEST, BOOKING_ACCEPTED, BOOKING_REJECTED
+  message   String
+  data      Json?
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+}
+
+model PaidRequest {
+  id                  String   @id @default(cuid())
+  customer_id         String // Maps to customerId from frontend
+  category            String
+  service_description String // Maps to serviceDescription from frontend
+  city                String?
+  budget              String?
+  status              String   @default("open") // 'open' or 'closed'
+  views               Int      @default(0)
+  responses           Int      @default(0)
+  created_at          DateTime @default(now())
+
+  // Relation to User (Customer)
+  customer User @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@map("paid_requests")
+}
+
+model GalleryItem {
+  id                String   @id @default(cuid())
+  performer_id      String
+  title             String
+  description       String?
+  image_urls        String[]
+  moderation_status String   @default("pending_approval")
+  meta_title        String?
+  meta_description  String?
+  keywords          String?
+  image_alt_text    String?
+  created_at        DateTime @default(now())
+
+  performer User @relation(fields: [performer_id], references: [id])
+}
+
+model Chat {
+  id         String   @id @default(cuid())
+  created_at DateTime @default(now())
+
+  users           User[]
+  messages        Message[]
+  support_request SupportRequest?
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  chat_id    String
+  sender_id  String
+  content    String
+  created_at DateTime @default(now())
+
+  chat   Chat @relation(fields: [chat_id], references: [id])
+  sender User @relation(fields: [sender_id], references: [id])
+}
+
+model SupportRequest {
+  id                  String    @id @default(cuid())
+  requester_id        String
+  requester_name      String
+  chat_id             String    @unique
+  status              String    @default("open")
+  assigned_manager_id String?
+  created_at          DateTime  @default(now())
+  closed_at           DateTime?
+
+  requester        User  @relation("RequesterSupport", fields: [requester_id], references: [id])
+  chat             Chat  @relation(fields: [chat_id], references: [id])
+  assigned_manager User? @relation("ManagerSupport", fields: [assigned_manager_id], references: [id])
+}
+
+model ReferralEvent {
+  id                String   @id @default(cuid())
+  partner_id        String
+  referred_user_id  String
+  commission_amount Float?
+  event_type        String
+  status            String?  @default("pending")
+  created_at        DateTime @default(now())
+
+  partner       User @relation("PartnerReferral", fields: [partner_id], references: [id])
+  referred_user User @relation("ReferredUser", fields: [referred_user_id], references: [id])
+}
+
+model Favorite {
+  id           String   @id @default(cuid())
+  customer_id  String
+  performer_id String
+  created_at   DateTime @default(now())
+
+  customer  User @relation("CustomerFavorites", fields: [customer_id], references: [id])
+  performer User @relation("PerformerFavorites", fields: [performer_id], references: [id])
+
+  @@unique([customer_id, performer_id])
+}
+
+model Article {
+  id               String   @id @default(uuid())
+  title            String
+  content          String   @db.Text // Stores HTML from Tiptap
+  slug             String   @unique
+  media_url        String?
+  media_type       String?
+  meta_title       String?
+  image_alt_text   String?
+  meta_description String?
+  keywords         String?
+  isActive         Boolean  @default(false) // Draft vs Published
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model SiteSettings {
+  id            String   @id @default("general_settings") // Single row approach
+  settings_data Json? // Stores: siteName, logoUrl, theme, contacts, categories, etc.
+  updated_at    DateTime @updatedAt
+}
+
+model PricingConfig {
+  id          String   @id @default("pricing_config") // Single row approach
+  config_data Json? // Stores: plans array, paidRequestPrice
+  updated_at  DateTime @updatedAt
+}
+
+model Certificate {
+  id                String   @id @default(cuid())
+  performer_id      String
+  file_url          String
+  description       String?
+  moderation_status String   @default("pending_approval")
+  created_at        DateTime @default(now())
+
+  performer User @relation(fields: [performer_id], references: [id])
+}
+
+model RecommendationLetter {
+  id                String   @id @default(cuid())
+  performer_id      String
+  file_url          String
+  description       String?
+  moderation_status String   @default("pending_approval")
+  created_at        DateTime @default(now())
+
+  performer User @relation(fields: [performer_id], references: [id])
+}
+
+model Prompt {
+  id        String   @id @default(cuid())
+  userId    String
+  prompt    String
+  response  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PayoutRequest {
+  id              String   @id @default(cuid())
+  partner_id      String
+  amount          Float
+  status          String   @default("pending") // pending, completed, rejected
+  payment_details String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  partner User @relation(fields: [partner_id], references: [id])
+}
+
+model SubscriptionPlan {
+  id              String           @id @default(uuid())
+  name            String
+  description     String
+  tier            SubscriptionTier @unique
+  priceMonthly    Int              @default(0)
+  priceHalfYearly Int?             @default(0) // 6 Months
+  priceYearly     Int?             @default(0) // 12 Months
+
+  features  String[] // Stored as array of strings
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions UserSubscription[]
+}
+
+model UserSubscription {
+  id     String @id @default(uuid())
+  userId String @unique // One active subscription per user
+  user   User   @relation(fields: [userId], references: [id])
+
+  planId String
+  plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  startDate DateTime  @default(now())
+  endDate   DateTime? // Null means lifetime or indefinite if logic dictates
+  isActive  Boolean   @default(true)
+  autoRenew Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Payment {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  amount       Int
+  currency     String        @default("RUB")
+  status       PaymentStatus @default(PENDING)
+  provider     String // e.g., "stripe", "yookassa"
+  providerTxId String? // Transaction ID from the provider
+  metadata     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+  bookingId String?
+}
+
+// model Payment {
+//   id         String   @id @default(cuid())
+//   user_id    String
+//   booking_id String?
+//   amount     Float
+//   status     String // e.g., 'succeeded', 'failed'
+//   created_at DateTime @default(now())
+
+//   user    User     @relation(fields: [user_id], references: [id])
+//   booking Booking? @relation(fields: [booking_id], references: [id])
+// }
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  expires      DateTime
+  sessionToken String   @unique
+  accessToken  String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  id         String    @id @default(cuid())
+  identifier String?
+  userId     String?
+  token      String    @unique
+  expires    DateTime?
+  user       User?     @relation(fields: [userId], references: [id])
+
+  @@unique([identifier, token])
+}

@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+        padding: 20px;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        background: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      }
+      .button {
+        display: inline-block;
+        padding: 12px 24px;
+        background-color: #007bff;
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      .footer {
+        margin-top: 20px;
+        font-size: 10px;
+        color: #bdbcbc;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Добро пожаловать, {{name}}!</h2>
+      <p>
+        Спасибо, что присоединились к нашей платформе в качестве исполнителя. Мы
+        рады видеть вас.
+      </p>
+      <p>
+        Для начала использования вашей учетной записи подтвердите свой адрес
+        электронной почты, нажав на кнопку ниже:
+      </p>
+
+      <p style="text-align: center; margin: 30px 0">
+        <a href="{{link}}" class="button">Подтвердить мой аккаунт</a>
+      </p>
+
+      <p>
+        Если кнопка не работает, скопируйте и вставьте эту ссылку в свой
+        браузер:
+      </p>
+      <p style="word-break: break-all; color: #007bff">{{link}}</p>
+
+      <div class="footer">
+        <p>
+          Если вы не создавали эту учетную запись, пожалуйста, проигнорируйте
+          это письмо.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+{
+  "name": "eventomir-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.3.0",
+    "@prisma/client": "^7.3.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "express-validator": "^7.3.1",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.9.2",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.0.2",
+    "nodemailer": "^8.0.1",
+    "pg": "^8.18.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11",
+    "prisma": "^7.3.0"
+  }
+}
