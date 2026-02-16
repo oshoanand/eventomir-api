@@ -3,6 +3,8 @@ import {
   getPlans,
   initiateCheckout,
   handleMockSuccess,
+  handlePaymentSuccess,
+  getRequestPrice,
 } from "../controllers/payment.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 
@@ -18,5 +20,6 @@ router.post("/checkout", verifyAuth, initiateCheckout);
 // Note: verifyAuth is NOT used here because this request comes from the "Payment Provider" redirect
 // Validation relies on the providerTxId (txId)
 router.get("/mock-success", handleMockSuccess);
+router.get("/request-price", getRequestPrice);
 
 export default router;

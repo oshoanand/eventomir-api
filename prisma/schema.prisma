@@ -152,21 +152,26 @@ model Notification {
 }
 
 model PaidRequest {
-  id                  String   @id @default(cuid())
-  customer_id         String // Maps to customerId from frontend
-  category            String
-  service_description String // Maps to serviceDescription from frontend
-  city                String?
-  budget              String?
-  status              String   @default("open") // 'open' or 'closed'
-  views               Int      @default(0)
-  responses           Int      @default(0)
-  created_at          DateTime @default(now())
+  id         String @id @default(uuid())
+  customerId String
+  customer   User   @relation(fields: [customerId], references: [id])
 
-  // Relation to User (Customer)
-  customer User @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  category           String
+  serviceDescription String
+  city               String? // Optional: null implies Remote/Online
+  budget             String?
 
-  @@map("paid_requests")
+  // Status flow: PENDING_PAYMENT -> OPEN -> CLOSED
+  status String @default("PENDING_PAYMENT")
+
+  paymentId String?  @unique
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  views     Int @default(0)
+  responses Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model GalleryItem {
@@ -363,10 +368,11 @@ model Payment {
   providerTxId String? // Transaction ID from the provider
   metadata     Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  booking   Booking? @relation(fields: [bookingId], references: [id])
-  bookingId String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  booking     Booking?     @relation(fields: [bookingId], references: [id])
+  bookingId   String?
+  paidRequest PaidRequest?
 }
 
 // model Payment {
