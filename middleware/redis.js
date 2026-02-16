@@ -8,6 +8,7 @@ const DEFAULT_TTL = 3600 * 24 * 2; // 2 day
 const redis = new Redis({
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: process.env.REDIS_PORT || 6379,
+  password: process.env.REDIS_PASSWORD || "",
   retryStrategy(times) {
     if (times > 5) {
       console.warn("⚠️ Redis is unreachable. Switching to DB-only mode.");
