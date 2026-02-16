@@ -1,6 +1,4 @@
 import prisma from "../libs/prisma.js";
-
-import prisma from "../libs/prisma.js";
 import { createPaymentIntent } from "../services/payment-gateway.js";
 
 // --- Create Request (Initiate Payment) ---

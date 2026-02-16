@@ -1,15 +1,10 @@
 import express from "express";
-import {
-  createPaidRequest,
-  getRequestsByCustomer,
-} from "../controllers/request.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-
 import {
   createPaidRequest,
   getCustomerRequests,
   getRequestsFeed,
-} from "../controllers/requests.js";
+} from "../controllers/request.js";
 
 const router = express.Router();
 
@@ -17,7 +12,7 @@ const router = express.Router();
 router.post("/", verifyAuth, createPaidRequest);
 
 // Matches the frontend url: `/api/requests/customer/${customerId}`
-router.get("/customer/:customerId", verifyAuth, getRequestsByCustomer);
+// router.get("/customer/:customerId", verifyAuth, getRequestsByCustomer);
 
 // POST /api/requests - Create (Protected)
 router.post("/", verifyAuth, createPaidRequest);
