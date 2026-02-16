@@ -1,6 +1,6 @@
 import express from "express";
 import http from "http";
-import { Server } from "socket.io";
+// import { Server } from "socket.io";
 import dotenv from "dotenv";
 import cors from "cors";
 import path from "path";
@@ -89,7 +89,8 @@ async function initializeExpressServer() {
   // Define Allowed Domains (Shared between Express and Socket.io)
   const allowedDomains = [
     "http://localhost:3000",
-    process.env.CLIENT_URL,
+    process.env.WEB_APP_URL,
+    process.env.ADMIN_PANEL_URL,
   ].filter(Boolean); // Removes undefined if env is missing
 
   app.use(

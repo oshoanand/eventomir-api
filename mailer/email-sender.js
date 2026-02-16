@@ -45,7 +45,7 @@ const getTemplate = (templateName, data) => {
 const sendVerificationEmail = async (toEmail, userName, token) => {
   try {
     // 1. Construct the verification link
-    const verificationLink = `${process.env.CLIENT_URL}/verify-email?token=${token}`;
+    const verificationLink = `${process.env.WEB_APP_URL}/verify-email?token=${token}`;
 
     // 2. Load and populate the HTML template
     const htmlEmail = getTemplate("verification-email", {
@@ -84,7 +84,7 @@ const sendVerificationEmail = async (toEmail, userName, token) => {
  */
 const sendModerationStatusEmail = async (toEmail, userName, status) => {
   try {
-    const profileLink = `${process.env.CLIENT_URL}/performer-profile`; // Or /customer-profile based on role logic if needed
+    const profileLink = `${process.env.WEB_APP_URL}/performer-profile`; // Or /customer-profile based on role logic if needed
 
     let subject = "";
     let statusText = "";
@@ -142,4 +142,38 @@ const sendModerationStatusEmail = async (toEmail, userName, status) => {
   }
 };
 
-export { sendVerificationEmail, sendModerationStatusEmail };
+const sendResetPasswordLinkEmail = async (link, toEmail, userName) => {
+  try {
+    //  Load and populate the HTML template
+    const htmlEmail = getTemplate("reset-password", {
+      name: userName,
+      link: link,
+    });
+
+    // 3. Define email options
+    const mailOptions = {
+      from: `"Eventomir" <${process.env.EMAIL_USER}>`, // Sender address
+      to: toEmail, // Receiver address
+      subject: "Eventomir | Ссылка для сброса пароля", // Subject line
+      html: htmlEmail, // HTML body
+    };
+
+    // 4. Send the email
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `password reset link email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendResetPasswordLinkEmail:", error);
+    // We re-throw the error so the calling function knows it failed
+    throw new Error(`Failed to send email: ${error.message}`);
+  }
+};
+
+export {
+  sendVerificationEmail,
+  sendModerationStatusEmail,
+  sendResetPasswordLinkEmail,
+};

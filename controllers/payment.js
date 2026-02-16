@@ -65,7 +65,7 @@ export const initiateCheckout = async (req, res) => {
 export const handleMockSuccess = async (req, res) => {
   try {
     const { txId } = req.query;
-    const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+    const clientUrl = process.env.WEB_APP_URL || "http://localhost:3000";
 
     if (!txId) {
       return res.redirect(`${clientUrl}/pricing?status=error`);
@@ -119,7 +119,7 @@ export const handleMockSuccess = async (req, res) => {
     return res.redirect(`${clientUrl}/pricing?status=success`);
   } catch (error) {
     console.error("Payment Success Handler Error:", error);
-    const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+    const clientUrl = process.env.WEB_APP_URL || "http://localhost:3000";
     return res.redirect(`${clientUrl}/pricing?status=server_error`);
   }
 };
