@@ -136,7 +136,7 @@ router.patch(
       if (req.files && req.files["profilePicture"]) {
         const file = req.files["profilePicture"][0];
 
-        const newPath = `${process.env.PHOTO_UPLOAD_URL}/uploads/performers/${file.filename}`;
+        const newPath = `${process.env.API_BASE_URL}/uploads/performers/${file.filename}`;
         updateData.profile_picture = newPath;
 
         // Cleanup: Delete old image
@@ -160,7 +160,7 @@ router.patch(
       // 6. Handle Background Picture Update
       if (req.files && req.files["backgroundPicture"]) {
         const file = req.files["backgroundPicture"][0];
-        const newPath = `${process.env.PHOTO_UPLOAD_URL}/uploads/performers/${file.filename}`;
+        const newPath = `${process.env.API_BASE_URL}/uploads/performers/${file.filename}`;
         updateData.background_picture = newPath;
 
         // Cleanup: Delete old image
@@ -308,7 +308,7 @@ router.post(
         return res.status(400).json({ message: "No file uploaded" });
       }
 
-      const fileUrl = `${process.env.PHOTO_UPLOAD_URL}/uploads/documents/${req.file.filename}`;
+      const fileUrl = `${process.env.API_BASE_URL}/uploads/documents/${req.file.filename}`;
 
       const letter = await prisma.recommendationLetter.create({
         data: {

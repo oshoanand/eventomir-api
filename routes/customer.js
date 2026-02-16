@@ -63,7 +63,7 @@ router.put(
         // Construct the public URL path.
         // Assuming you serve the 'uploads' folder statically from your root.
         // Windows uses backslashes, so we normalize to forward slashes for URLs.
-        const profileImageUrl = `${process.env.PHOTO_UPLOAD_URL}/uploads/profiles/${req.file.filename}`;
+        const profileImageUrl = `${process.env.API_BASE_URL}/uploads/profiles/${req.file.filename}`;
         updateData.profile_picture = profileImageUrl;
       }
 

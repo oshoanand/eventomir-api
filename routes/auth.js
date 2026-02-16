@@ -57,7 +57,7 @@ router.post("/register-performer", async (req, res) => {
     // Set expiration to 2 days from now
     const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
 
-    const defaultImage = `${process.env.PHOTO_UPLOAD_URL}/uploads/no-image.jpg`;
+    const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
     // 4. Create the user record with all data flattened
     const newUser = await prisma.user.create({
@@ -163,7 +163,7 @@ router.post("/register-customer", async (req, res) => {
     const rawToken = crypto.randomBytes(32).toString("hex");
     // Set expiration to 2 days from now
     const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
-    const defaultImage = `${process.env.PHOTO_UPLOAD_URL}/uploads/no-image.jpg`;
+    const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
     // 4. Create the user record with all data flattened
     const newUser = await prisma.user.create({
