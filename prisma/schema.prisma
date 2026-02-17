@@ -56,7 +56,7 @@ model User {
   subscription_plan_id        String?   @default("econom")
   subscription_end_date       DateTime?
   moderation_status           String    @default("pending_approval")
-  parent_agency_id            String?
+  // parent_agency_id            String?
   sub_profile_ids             String[]
   created_at                  DateTime  @default(now())
   updated_at                  DateTime  @updatedAt
@@ -103,9 +103,13 @@ model User {
   sessions                      Session[]
   verificationTokens            VerificationToken[]
 
-  parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sub_agencies  User[] @relation("SubAgencies")
-  chats         Chat[]
+  parentAgencyId String?
+  parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
+  subProfiles    User[]  @relation("AgencySpecialists")
+
+  // parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // sub_agencies  User[] @relation("SubAgencies")
+  chats Chat[]
 }
 
 model Review {
