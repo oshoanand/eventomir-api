@@ -7,6 +7,7 @@ import {
   sendResetPasswordLinkEmail,
 } from "../mailer/email-sender.js";
 import crypto from "crypto";
+import { invalidatePattern } from "../middleware/redis.js";
 const router = express.Router();
 
 router.post("/request-password-reset", async (req, res) => {
@@ -35,14 +36,14 @@ router.post("/register-performer", async (req, res) => {
   try {
     const { performerData, password, referralId } = req.body;
 
-    // 1. Validate incoming data
+    //  Validate incoming data
     if (!performerData.email || !password || !performerData.name) {
       return res.status(400).json({
         message: "Required fields (email, password, name) are missing.",
       });
     }
 
-    // 2. Check for an existing user
+    //  Check for an existing user
     const existingUser = await prisma.user.findUnique({
       where: { email: performerData.email },
     });
@@ -50,7 +51,7 @@ router.post("/register-performer", async (req, res) => {
     if (existingUser) {
       return res
         .status(409)
-        .json({ message: "User with this email already exists." });
+        .json({ message: "электронной почты уже зарегистрирован!" });
     }
 
     // 3. Hash the password
@@ -62,7 +63,7 @@ router.post("/register-performer", async (req, res) => {
 
     const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
-    // 4. Create the user record with all data flattened
+    //  Create the user record with all data flattened
     const newUser = await prisma.user.create({
       data: {
         email: performerData.email,
@@ -87,7 +88,7 @@ router.post("/register-performer", async (req, res) => {
       },
     });
 
-    // 5. Handle the referral link (if provided)
+    //  Handle the referral link (if provided)
     if (referralId) {
       const partner = await prisma.partner.findUnique({
         where: { referral_id: referralId }, // Make sure this field name is correct
@@ -109,7 +110,7 @@ router.post("/register-performer", async (req, res) => {
       }
     }
 
-    // 6. Send Verification Email (Using the utility)
+    //  Send Verification Email (Using the utility)
     try {
       // We do not await this if we want the response to return immediately,
       // but usually, it's safer to await to catch config errors early.
@@ -123,18 +124,24 @@ router.post("/register-performer", async (req, res) => {
       // Optional: You might want to flag the user in DB that email sending failed
     }
 
-    // 7. Send a success response
+    //  Invalidate Redis Cache
+    // The GET route uses fetchCached("customers", "performers_p1...", ...)
+    // This creates keys like "customers:performers_p1_l10..."
+    // We must delete ALL keys matching this pattern.
+    await invalidatePattern("users:performers_p*");
+
+    // Send a success response
     return res.status(201).json({
       success: true,
       message:
-        "Registration successful! Please check your email to verify your account. Your profile will be available after moderation.",
+        "Регистрация прошла успешно! Пожалуйста, проверьте свою электронную почту для подтверждения учетной записи. Ваш профиль будет доступен после модерации.",
     });
   } catch (error) {
     console.error("Error during performer registration:", error);
     // Provide the actual Prisma error in the response for easier debugging
     return res
       .status(500)
-      .json({ message: "Internal Server Error.", error: error.message });
+      .json({ message: "Внутренняя ошибка сервера : ", error: error.message });
   }
 });
 
@@ -201,6 +208,8 @@ router.post("/register-customer", async (req, res) => {
       console.error("Failed to send verification email:", emailError.message);
       // Optional: You might want to flag the user in DB that email sending failed
     }
+
+    await invalidatePattern("users:customers_p*");
 
     // 6. Send a success response
     return res.status(201).json({

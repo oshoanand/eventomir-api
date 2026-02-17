@@ -181,7 +181,7 @@ router.get("/customers", async (req, res) => {
     const cacheKey = `customers_p${page}_l${limit}_s${search.replace(/\s/g, "")}`;
 
     // 4. Use the generic caching function to fetch data
-    const result = await fetchCached("customers", cacheKey, async () => {
+    const result = await fetchCached("users", cacheKey, async () => {
       // Run a transaction to get both total count and paginated data efficiently
       const [total, customers] = await prisma.$transaction([
         prisma.user.count({ where: whereClause }),
