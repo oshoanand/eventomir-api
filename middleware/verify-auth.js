@@ -26,9 +26,10 @@ export const verifyAuth = async (req, res, next) => {
       algorithms: "HS256",
     });
 
+    // console.log(decoded.role);
     // 2. CRITICAL FIX: Attach the user ID to the request object
     // This allows your controllers to access 'req.user.id'
-    req.user = { id: decoded.id };
+    req.user = { id: decoded.id, role: decoded.role };
 
     next();
   } catch (err) {
