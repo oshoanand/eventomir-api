@@ -79,13 +79,13 @@ model User {
   referral_id     String? @unique
   payment_details String?
 
-  reviews_written               Review[]               @relation("CustomerReviews")
-  reviews_received              Review[]               @relation("PerformerReviews")
-  bookings_as_customer          Booking[]              @relation("CustomerBookings")
-  bookings_as_performer         Booking[]              @relation("PerformerBookings")
-  paid_requests                 PaidRequest[]
-  gallery_items                 GalleryItem[]
-  sent_messages                 Message[]
+  reviews_written       Review[]      @relation("CustomerReviews")
+  reviews_received      Review[]      @relation("PerformerReviews")
+  bookings_as_customer  Booking[]     @relation("CustomerBookings")
+  bookings_as_performer Booking[]     @relation("PerformerBookings")
+  paid_requests         PaidRequest[]
+  gallery_items         GalleryItem[]
+
   support_requests_as_requester SupportRequest[]       @relation("RequesterSupport")
   support_requests_as_manager   SupportRequest[]       @relation("ManagerSupport")
   referral_events_as_partner    ReferralEvent[]        @relation("PartnerReferral")
@@ -95,6 +95,8 @@ model User {
   certificates                  Certificate[]
   recommendation_letters        RecommendationLetter[]
   prompts                       Prompt[]
+  chats                         Chat[]                 @relation("ChatParticipants")
+  messages                      Message[]
   notifications                 Notification[]
   payout_requests               PayoutRequest[]
   subscription                  UserSubscription?
@@ -109,7 +111,6 @@ model User {
 
   // parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   // sub_agencies  User[] @relation("SubAgencies")
-  chats Chat[]
 }
 
 model Review {
@@ -195,23 +196,31 @@ model GalleryItem {
 }
 
 model Chat {
-  id         String   @id @default(cuid())
-  created_at DateTime @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  users           User[]
+  // A chat can have multiple participants (usually 2 for direct messages)
+  participants User[] @relation("ChatParticipants")
+
+  // Relation to messages
   messages        Message[]
   support_request SupportRequest?
 }
 
 model Message {
-  id         String   @id @default(cuid())
-  chat_id    String
-  sender_id  String
-  content    String
-  created_at DateTime @default(now())
+  id        String   @id @default(cuid())
+  content   String // Text content or file URL
+  createdAt DateTime @default(now())
+  isRead    Boolean  @default(false)
 
-  chat   Chat @relation(fields: [chat_id], references: [id])
-  sender User @relation(fields: [sender_id], references: [id])
+  // Relation to Chat
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  // Relation to Sender
+  senderId String
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
 
 model SupportRequest {
@@ -270,10 +279,42 @@ model Article {
   updatedAt        DateTime @updatedAt
 }
 
+// model SiteSettings {
+//   id            String   @id @default("general_settings") // Single row approach
+//   settings_data Json? // Stores: siteName, logoUrl, theme, contacts, categories, etc.
+//   updated_at    DateTime @updatedAt
+// }
+
 model SiteSettings {
-  id            String   @id @default("general_settings") // Single row approach
-  settings_data Json? // Stores: siteName, logoUrl, theme, contacts, categories, etc.
-  updated_at    DateTime @updatedAt
+  id String @id @default("general_settings")
+
+  // --- 1. General Settings ---
+  siteName    String  @default("Eventomir")
+  logoUrl     String?
+  logoAltText String?
+  faviconUrl  String?
+  fontFamily  String  @default("Inter, sans-serif")
+
+  // --- 2. Nested Objects (Stored as JSON) ---
+
+  // Stores: { email: string, phone: string, vkLink: string, telegramLink: string }
+  contacts Json? @default("{}")
+
+  // Stores: { backgroundColor: string, primaryColor: string, accentColor: string }
+  theme Json? @default("{\"backgroundColor\": \"#ffffff\", \"primaryColor\": \"#3b82f6\", \"accentColor\": \"#f59e0b\"}")
+
+  // --- 3. Arrays (Stored as JSON) ---
+
+  // Stores: Array<{ id: string, name: string, icon: string }>
+  siteCategories Json @default("[]")
+
+  // Stores: Array<{ path: string, title: string, description: string, keywords: string }>
+  pageSpecificSEO Json @default("[]")
+
+  // --- 4. Metadata ---
+  updatedAt DateTime @updatedAt
+
+  @@map("site_settings")
 }
 
 model PricingConfig {

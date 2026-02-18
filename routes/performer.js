@@ -113,13 +113,14 @@ router.patch(
       // 4. Parse Text Data
       // FormData sends everything as strings. Simple fields work directly,
       // but arrays/objects (like roles) need JSON.parse if sent as stringified JSON.
-      const { name, description, city, phone, roles } = req.body;
+      const { name, description, city, phone, roles, priceRange } = req.body;
 
       const updateData = {};
       if (name) updateData.name = name;
       if (description) updateData.description = description;
       if (city) updateData.city = city;
       if (phone) updateData.phone = phone;
+      if (priceRange) updateData.price_range = priceRange;
 
       // Handle Roles Array
       if (roles) {

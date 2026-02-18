@@ -21,7 +21,8 @@ import articleRoutes from "./routes/article.js";
 import bookingRoutes from "./routes/booking.js";
 import notificationRoutes from "./routes/notification.js";
 import paymentRoutes from "./routes/payment.js";
-import adminPlanRoutes from "./routes/subscription-plan.js";
+import tarrifPlanRoutes from "./routes/subscription-plan.js";
+import chatRoutes from "./routes/chat.js";
 
 // Services
 //import setupTTL from "./utils/ttl-service.js";
@@ -113,18 +114,19 @@ async function initializeExpressServer() {
   await connectRedis();
 
   app.use("/api/admin", adminRoutes);
-  app.use("/api/users", userRoutes);
-  app.use("/api/auth", authRoutes);
-  app.use("/api/customers", customerRoutes);
-  app.use("/api/performers", performerRoutes);
-  app.use("/api/settings", settingRoutes);
-  app.use("/api/pricing", pricingRoutes);
-  app.use("/api/requests", requestRoutes);
   app.use("/api/articles", articleRoutes);
+  app.use("/api/auth", authRoutes);
   app.use("/api/bookings", bookingRoutes);
+  app.use("/api/customers", customerRoutes);
+  app.use("/api/chats", chatRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/payments", paymentRoutes);
-  app.use("/api/admin/plans", adminPlanRoutes);
+  app.use("/api/performers", performerRoutes);
+  app.use("/api/pricing", pricingRoutes);
+  app.use("/api/requests", requestRoutes);
+  app.use("/api/settings", settingRoutes);
+  app.use("/api/tariff/plans", tarrifPlanRoutes);
+  app.use("/api/users", userRoutes);
 
   // --- Server Start ---
 

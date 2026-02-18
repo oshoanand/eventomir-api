@@ -218,4 +218,146 @@ router.patch("/profile/moderation/:id", async (req, res) => {
   }
 });
 
+// =================================================================
+//                 🆕 BOOKING MANAGEMENT ROUTES
+// =================================================================
+
+// --- 5. GET ALL BOOKINGS (Admin & Support) ---
+router.get(
+  "/bookings",
+  requireRole(["administrator", "support"]),
+  async (req, res) => {
+    try {
+      const { status, search } = req.query;
+
+      const where = {};
+
+      // Filter by Status
+      if (status && status !== "ALL") {
+        where.status = status;
+      }
+
+      // Filter by Search (ID, Customer Name, Performer Name)
+      if (search) {
+        where.OR = [
+          { id: { contains: search, mode: "insensitive" } },
+          { customer: { name: { contains: search, mode: "insensitive" } } },
+          { performer: { name: { contains: search, mode: "insensitive" } } },
+        ];
+      }
+
+      const bookings = await prisma.booking.findMany({
+        where,
+        include: {
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              profile_picture: true,
+            },
+          },
+          performer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+
+              profile_picture: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      // Flatten data for easier frontend consumption if needed,
+      // but your frontend interface matches the Prisma structure well.
+      res.json(bookings);
+    } catch (error) {
+      console.error("Fetch bookings error:", error);
+      res.status(500).json({ message: "Error fetching bookings" });
+    }
+  },
+);
+
+// --- 6. UPDATE BOOKING STATUS (Admin Only) ---
+router.patch(
+  "/bookings/:id",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      // Validate Status Enum
+      const validStatuses = [
+        "PENDING",
+        "CONFIRMED",
+        "REJECTED",
+        "COMPLETED",
+        "CANCELLED",
+        "DISPUTED",
+      ];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ message: "Invalid status value" });
+      }
+
+      const updatedBooking = await prisma.booking.update({
+        where: { id },
+        data: { status },
+        include: {
+          customer: { select: { id: true } },
+          performer: { select: { id: true } },
+        },
+      });
+
+      // Notify Parties via Socket/Redis
+      // 1. Notify Customer
+      await sendNotification(
+        updatedBooking.customerId,
+        "BOOKING_UPDATE",
+        `Статус вашего бронирования изменен администратором на: ${status}`,
+        { bookingId: id, status },
+      );
+
+      // 2. Notify Performer
+      await sendNotification(
+        updatedBooking.performerId,
+        "BOOKING_UPDATE",
+        `Администратор изменил статус бронирования #${id.slice(-4)} на: ${status}`,
+        { bookingId: id, status },
+      );
+
+      res.json(updatedBooking);
+    } catch (error) {
+      console.error("Update booking error:", error);
+      res.status(500).json({ message: "Error updating booking status" });
+    }
+  },
+);
+
+// --- 7. DELETE BOOKING (Admin Only) ---
+router.delete(
+  "/bookings/:id",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Optional: Check if it exists first
+      const booking = await prisma.booking.findUnique({ where: { id } });
+      if (!booking)
+        return res.status(404).json({ message: "Booking not found" });
+
+      await prisma.booking.delete({ where: { id } });
+
+      res.json({ message: "Booking deleted successfully" });
+    } catch (error) {
+      console.error("Delete booking error:", error);
+      res.status(500).json({ message: "Error deleting booking" });
+    }
+  },
+);
+
 export default router;

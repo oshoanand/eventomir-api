@@ -3,16 +3,16 @@ import prisma from "../libs/prisma.js";
 import { createUploader } from "../utils/multer.js";
 
 const router = Router();
-const jobProofUpload = createUploader("proof");
+
+// Configure Multer for 'siteSettings' folder
+const photoUploader = createUploader("sitesettings");
 
 // --- CONSTANTS ---
 const SETTINGS_ID = "general_settings";
-const PRICING_ID = "pricing_config";
 
-// --- DEFAULTS ---
-// Default structure to ensure frontend doesn't break on fresh DB
+// --- DEFAULTS (For fallback) ---
 const defaultSettings = {
-  siteName: "My Awesome Site",
+  siteName: "Eventomir",
   logoUrl: "",
   logoAltText: "",
   faviconUrl: "",
@@ -27,16 +27,11 @@ const defaultSettings = {
   pageSpecificSEO: [],
 };
 
-const defaultPricing = {
-  plans: [], // Populate with your default plans if needed
-  paidRequestPrice: 0,
-};
-
 // --- ROUTES ---
 
 /**
  * GET /api/settings/general
- * Retrieve general site settings
+ * Retrieve general site settings for Admin Panel
  */
 router.get("/general", async (req, res, next) => {
   try {
@@ -45,17 +40,21 @@ router.get("/general", async (req, res, next) => {
     });
 
     if (!settings) {
-      // Create default if not exists
+      // Create with defaults if not exists
       settings = await prisma.siteSettings.create({
         data: {
           id: SETTINGS_ID,
-          settings_data: defaultSettings,
+          siteName: defaultSettings.siteName,
+          fontFamily: defaultSettings.fontFamily,
+          theme: defaultSettings.theme,
+          contacts: defaultSettings.contacts,
+          siteCategories: defaultSettings.siteCategories,
+          pageSpecificSEO: defaultSettings.pageSpecificSEO,
         },
       });
     }
 
-    // Merge with defaults to ensure all keys exist (in case DB has partial data)
-    res.json({ ...defaultSettings, ...settings.settings_data });
+    res.json(settings);
   } catch (error) {
     next(error);
   }
@@ -63,103 +62,53 @@ router.get("/general", async (req, res, next) => {
 
 /**
  * PUT /api/settings/general
- * Update specific fields in general settings
+ * Update settings (partial update supported)
  */
 router.put("/general", async (req, res, next) => {
   try {
     const updates = req.body;
 
-    // Fetch existing data first
-    const existing = await prisma.siteSettings.findUnique({
+    // We can pass the 'updates' object directly because the keys in your
+    // frontend state (SiteSettings interface) match the Prisma model columns exactly.
+    // Prisma will ignore undefined fields in the update object.
+
+    const updated = await prisma.siteSettings.update({
       where: { id: SETTINGS_ID },
+      data: {
+        siteName: updates.siteName,
+        logoUrl: updates.logoUrl,
+        logoAltText: updates.logoAltText,
+        faviconUrl: updates.faviconUrl,
+        fontFamily: updates.fontFamily,
+        contacts: updates.contacts, // JSON column
+        theme: updates.theme, // JSON column
+        siteCategories: updates.siteCategories, // JSON column
+        pageSpecificSEO: updates.pageSpecificSEO, // JSON column
+      },
     });
 
-    const currentData = existing?.settings_data || defaultSettings;
-
-    // Merge updates into current data
-    const newData = { ...currentData, ...updates };
-
-    const updated = await prisma.siteSettings.upsert({
-      where: { id: SETTINGS_ID },
-      update: { settings_data: newData },
-      create: { id: SETTINGS_ID, settings_data: newData },
-    });
-
-    res.json(updated.settings_data);
+    res.json(updated);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * GET /api/settings/pricing
- * Retrieve pricing configuration
+ * POST /api/settings/upload
+ * Handle file uploads for Logo and Favicon
  */
-router.get("/pricing", async (req, res, next) => {
-  try {
-    let pricing = await prisma.pricingConfig.findUnique({
-      where: { id: PRICING_ID },
-    });
-
-    if (!pricing) {
-      pricing = await prisma.pricingConfig.create({
-        data: {
-          id: PRICING_ID,
-          config_data: defaultPricing,
-        },
-      });
-    }
-
-    res.json({ ...defaultPricing, ...pricing.config_data });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * PUT /api/settings/pricing
- * Update pricing configuration
- */
-router.put("/pricing", async (req, res, next) => {
-  try {
-    const updates = req.body; // Expecting full config object usually, or partial
-
-    // If you want to merge carefully like above, do fetch-merge-update.
-    // If frontend sends the WHOLE object every time, you can just overwrite.
-    // We will do fetch-merge for safety.
-
-    const existing = await prisma.pricingConfig.findUnique({
-      where: { id: PRICING_ID },
-    });
-    const currentData = existing?.config_data || defaultPricing;
-    const newData = { ...currentData, ...updates };
-
-    const updated = await prisma.pricingConfig.upsert({
-      where: { id: PRICING_ID },
-      update: { config_data: newData },
-      create: { id: PRICING_ID, config_data: newData },
-    });
-
-    res.json(updated.config_data);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/upload", jobProofUpload.single("file"), (req, res) => {
+router.post("/upload", photoUploader.single("file"), (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // Construct public URL
-    // NOTE: In production, change 'localhost:5000' to your actual domain or use env var
-    const baseUrl = process.env.API_BASE_URL || "http://localhost:5000";
-    const fileUrl = `${baseUrl}/uploads/${req.file.filename}`;
+    // Construct the public URL (Assuming you serve 'uploads' folder statically)
+    const fileUrl = `${process.env.API_BASE_URL || "http://localhost:8800"}/uploads/sitesettings/${req.file.filename}`;
 
     res.json({ url: fileUrl });
   } catch (error) {
-    res.status(500).json({ error: "Upload failed", details: error.message });
+    next(error);
   }
 });
 
