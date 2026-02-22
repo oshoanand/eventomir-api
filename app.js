@@ -23,6 +23,7 @@ import notificationRoutes from "./routes/notification.js";
 import paymentRoutes from "./routes/payment.js";
 import tarrifPlanRoutes from "./routes/subscription-plan.js";
 import chatRoutes from "./routes/chat.js";
+import partnerRoutes from "./routes/partner.js";
 
 // Services
 //import setupTTL from "./utils/ttl-service.js";
@@ -89,7 +90,7 @@ async function initializeExpressServer() {
   // Express CORS Setup (Using the shared allowedDomains)
   // Define Allowed Domains (Shared between Express and Socket.io)
   const allowedDomains = [
-    "http://localhost:3000",
+    process.env.PARTNER_APP_URL,
     process.env.WEB_APP_URL,
     process.env.ADMIN_PANEL_URL,
   ].filter(Boolean); // Removes undefined if env is missing
@@ -127,6 +128,7 @@ async function initializeExpressServer() {
   app.use("/api/settings", settingRoutes);
   app.use("/api/tariff/plans", tarrifPlanRoutes);
   app.use("/api/users", userRoutes);
+  app.use("/api/partners", partnerRoutes);
 
   // --- Server Start ---
 

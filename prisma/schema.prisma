@@ -1,3 +1,494 @@
+// generator client {
+//   provider        = "prisma-client"
+//   output          = "../generated/prisma"
+//   previewFeatures = ["views"]
+// }
+
+// datasource db {
+//   provider = "postgresql"
+// }
+
+// enum BookingStatus {
+//   PENDING
+//   CONFIRMED
+//   REJECTED
+//   CANCELLED_BY_CUSTOMER
+// }
+
+// enum NotificationType {
+//   BOOKING_REQUEST
+//   BOOKING_UPDATE
+//   SYSTEM
+//   PARTNER_REQUEST
+//   PARTNER_UPDATE
+// }
+
+// enum SubscriptionTier {
+//   FREE
+//   STANDARD
+//   PREMIUM
+// }
+
+// enum PaymentStatus {
+//   PENDING
+//   COMPLETED
+//   FAILED
+//   REFUNDED
+// }
+
+// enum Status {
+//   PENDING
+//   APPROVED
+//   REJECTED
+//   CANCELLED
+// }
+
+// model User {
+//   id                          String    @id @default(cuid())
+//   email                       String    @unique
+//   password                    String
+//   name                        String?
+//   phone                       String?
+//   city                        String?
+//   profile_picture             String?
+//   registration_date           DateTime  @default(now())
+//   role                        String    @default("customer")
+//   account_type                String?
+//   company_name                String?
+//   inn                         String?
+//   description                 String?
+//   background_picture          String?
+//   roles                       String[]
+//   price_range                 Int[]
+//   latitude                    Float?
+//   longitude                   Float?
+//   subscription_plan_id        String?   @default("econom")
+//   subscription_end_date       DateTime?
+//   moderation_status           String    @default("pending_approval")
+//   // parent_agency_id            String?
+//   sub_profile_ids             String[]
+//   created_at                  DateTime  @default(now())
+//   updated_at                  DateTime  @updatedAt
+//   profile_picture_alt_text    String?
+//   background_picture_alt_text String?
+//   profile_meta_title          String?
+//   profile_meta_description    String?
+//   profile_keywords            String?
+//   details                     Json?
+//   status                      String?   @default("active")
+//   emailVerified               DateTime?
+//   experience                  String?
+//   resetPasswordToken          String?
+//   resetPasswordExpires        DateTime?
+//   favorite_performers         Json?
+
+//   // Fields for Partner role
+//   balance         Float?
+//   total_earned    Float?
+//   referral_id     String? @unique
+//   payment_details String?
+
+//   reviews_written       Review[]      @relation("CustomerReviews")
+//   reviews_received      Review[]      @relation("PerformerReviews")
+//   bookings_as_customer  Booking[]     @relation("CustomerBookings")
+//   bookings_as_performer Booking[]     @relation("PerformerBookings")
+//   paid_requests         PaidRequest[]
+//   gallery_items         GalleryItem[]
+
+//   support_requests_as_requester SupportRequest[]       @relation("RequesterSupport")
+//   support_requests_as_manager   SupportRequest[]       @relation("ManagerSupport")
+//   referral_events_as_partner    ReferralEvent[]        @relation("PartnerReferral")
+//   referral_events_as_referred   ReferralEvent[]        @relation("ReferredUser")
+//   favorites_given               Favorite[]             @relation("CustomerFavorites")
+//   favorites_received            Favorite[]             @relation("PerformerFavorites")
+//   certificates                  Certificate[]
+//   recommendation_letters        RecommendationLetter[]
+//   prompts                       Prompt[]
+//   chats                         Chat[]                 @relation("ChatParticipants")
+//   messages                      Message[]
+//   notifications                 Notification[]
+//   payout_requests               PayoutRequest[]
+//   subscription                  UserSubscription?
+//   payments                      Payment[]
+//   accounts                      Account[]
+//   sessions                      Session[]
+//   verificationTokens            VerificationToken[]
+
+//   parentAgencyId String?
+//   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
+//   subProfiles    User[]  @relation("AgencySpecialists")
+
+//   // parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+//   // sub_agencies  User[] @relation("SubAgencies")
+// }
+
+// model Review {
+//   id            String   @id @default(cuid())
+//   performer_id  String
+//   customer_id   String
+//   customer_name String
+//   rating        Int
+//   comment       String?
+//   created_at    DateTime @default(now())
+
+//   performer User @relation("PerformerReviews", fields: [performer_id], references: [id])
+//   customer  User @relation("CustomerReviews", fields: [customer_id], references: [id])
+// }
+
+// model Booking {
+//   id      String        @id @default(uuid())
+//   date    DateTime
+//   details String?
+//   status  BookingStatus @default(PENDING)
+
+//   // Relations
+//   customerId String
+//   customer   User   @relation("CustomerBookings", fields: [customerId], references: [id])
+
+//   performerId String
+//   performer   User   @relation("PerformerBookings", fields: [performerId], references: [id])
+
+//   createdAt DateTime  @default(now())
+//   updatedAt DateTime  @updatedAt
+//   Payment   Payment[]
+// }
+
+// model PartnershipRequest {
+//   id        String   @id @default(uuid())
+//   name      String
+//   email     String   @unique
+//   website   String
+//   status    Status   @default(PENDING)
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   @@map("partnership_requests")
+// }
+
+// model Notification {
+//   id        String           @id @default(uuid())
+//   userId    String
+//   user      User             @relation(fields: [userId], references: [id])
+//   type      NotificationType
+//   message   String
+//   data      Json?
+//   link      String?
+//   isRead    Boolean          @default(false)
+//   createdAt DateTime         @default(now())
+// }
+
+// model PaidRequest {
+//   id         String @id @default(uuid())
+//   customerId String
+//   customer   User   @relation(fields: [customerId], references: [id])
+
+//   category           String
+//   serviceDescription String
+//   city               String? // Optional: null implies Remote/Online
+//   budget             String?
+
+//   // Status flow: PENDING_PAYMENT -> OPEN -> CLOSED
+//   status String @default("PENDING_PAYMENT")
+
+//   paymentId String?  @unique
+//   payment   Payment? @relation(fields: [paymentId], references: [id])
+
+//   views     Int @default(0)
+//   responses Int @default(0)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+// }
+
+// model GalleryItem {
+//   id                String   @id @default(cuid())
+//   performer_id      String
+//   title             String
+//   description       String?
+//   image_urls        String[]
+//   moderation_status String   @default("pending_approval")
+//   meta_title        String?
+//   meta_description  String?
+//   keywords          String?
+//   image_alt_text    String?
+//   created_at        DateTime @default(now())
+
+//   performer User @relation(fields: [performer_id], references: [id])
+// }
+
+// model Chat {
+//   id        String   @id @default(cuid())
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   // A chat can have multiple participants (usually 2 for direct messages)
+//   participants User[] @relation("ChatParticipants")
+
+//   // Relation to messages
+//   messages        Message[]
+//   support_request SupportRequest?
+// }
+
+// model Message {
+//   id        String   @id @default(cuid())
+//   content   String // Text content or file URL
+//   createdAt DateTime @default(now())
+//   isRead    Boolean  @default(false)
+
+//   // Relation to Chat
+//   chatId String
+//   chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+//   // Relation to Sender
+//   senderId String
+//   sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+// }
+
+// model SupportRequest {
+//   id                  String    @id @default(cuid())
+//   requester_id        String
+//   requester_name      String
+//   chat_id             String    @unique
+//   status              String    @default("open")
+//   assigned_manager_id String?
+//   created_at          DateTime  @default(now())
+//   closed_at           DateTime?
+
+//   requester        User  @relation("RequesterSupport", fields: [requester_id], references: [id])
+//   chat             Chat  @relation(fields: [chat_id], references: [id])
+//   assigned_manager User? @relation("ManagerSupport", fields: [assigned_manager_id], references: [id])
+// }
+
+// model ReferralEvent {
+//   id                String   @id @default(cuid())
+//   partner_id        String
+//   referred_user_id  String
+//   commission_amount Float?
+//   event_type        String
+//   status            String?  @default("pending")
+//   created_at        DateTime @default(now())
+
+//   partner       User @relation("PartnerReferral", fields: [partner_id], references: [id])
+//   referred_user User @relation("ReferredUser", fields: [referred_user_id], references: [id])
+// }
+
+// model Favorite {
+//   id           String   @id @default(cuid())
+//   customer_id  String
+//   performer_id String
+//   created_at   DateTime @default(now())
+
+//   customer  User @relation("CustomerFavorites", fields: [customer_id], references: [id])
+//   performer User @relation("PerformerFavorites", fields: [performer_id], references: [id])
+
+//   @@unique([customer_id, performer_id])
+// }
+
+// model Article {
+//   id               String   @id @default(uuid())
+//   title            String
+//   content          String   @db.Text // Stores HTML from Tiptap
+//   slug             String   @unique
+//   media_url        String?
+//   media_type       String?
+//   meta_title       String?
+//   image_alt_text   String?
+//   meta_description String?
+//   keywords         String?
+//   isActive         Boolean  @default(false) // Draft vs Published
+//   createdAt        DateTime @default(now())
+//   updatedAt        DateTime @updatedAt
+// }
+
+// // model SiteSettings {
+// //   id            String   @id @default("general_settings") // Single row approach
+// //   settings_data Json? // Stores: siteName, logoUrl, theme, contacts, categories, etc.
+// //   updated_at    DateTime @updatedAt
+// // }
+
+// model SiteSettings {
+//   id          String  @id @default("general_settings")
+//   siteName    String  @default("Eventomir")
+//   logoUrl     String?
+//   logoAltText String?
+//   faviconUrl  String?
+//   fontFamily  String  @default("Inter, sans-serif")
+//   // Stores: { email: string, phone: string, vkLink: string, telegramLink: string }
+//   contacts    Json?   @default("{}")
+
+//   // Stores: { backgroundColor: string, primaryColor: string, accentColor: string }
+//   theme Json? @default("{\"backgroundColor\": \"#ffffff\", \"primaryColor\": \"#3b82f6\", \"accentColor\": \"#f59e0b\"}")
+
+//   // --- 3. Arrays (Stored as JSON) ---
+
+//   // Stores: Array<{ id: string, name: string, icon: string }>
+//   siteCategories Json @default("[]")
+
+//   // Stores: Array<{ path: string, title: string, description: string, keywords: string }>
+//   pageSpecificSEO Json @default("[]")
+
+//   // --- 4. Metadata ---
+//   updatedAt DateTime @updatedAt
+
+//   @@map("site_settings")
+// }
+
+// model PricingConfig {
+//   id          String   @id @default("pricing_config") // Single row approach
+//   config_data Json? // Stores: plans array, paidRequestPrice
+//   updated_at  DateTime @updatedAt
+// }
+
+// model Certificate {
+//   id                String   @id @default(cuid())
+//   performer_id      String
+//   file_url          String
+//   description       String?
+//   moderation_status String   @default("pending_approval")
+//   created_at        DateTime @default(now())
+
+//   performer User @relation(fields: [performer_id], references: [id])
+// }
+
+// model RecommendationLetter {
+//   id                String   @id @default(cuid())
+//   performer_id      String
+//   file_url          String
+//   description       String?
+//   moderation_status String   @default("pending_approval")
+//   created_at        DateTime @default(now())
+
+//   performer User @relation(fields: [performer_id], references: [id])
+// }
+
+// model Prompt {
+//   id        String   @id @default(cuid())
+//   userId    String
+//   prompt    String
+//   response  String
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   user User @relation(fields: [userId], references: [id])
+// }
+
+// model PayoutRequest {
+//   id              String   @id @default(cuid())
+//   partner_id      String
+//   amount          Float
+//   status          String   @default("pending") // pending, completed, rejected
+//   payment_details String?
+//   created_at      DateTime @default(now())
+//   updated_at      DateTime @updatedAt
+
+//   partner User @relation(fields: [partner_id], references: [id])
+// }
+
+// model SubscriptionPlan {
+//   id              String           @id @default(uuid())
+//   name            String
+//   description     String
+//   tier            SubscriptionTier @unique
+//   priceMonthly    Int              @default(0)
+//   priceHalfYearly Int?             @default(0) // 6 Months
+//   priceYearly     Int?             @default(0) // 12 Months
+
+//   features  String[] // Stored as array of strings
+//   isActive  Boolean  @default(true)
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   subscriptions UserSubscription[]
+// }
+
+// model UserSubscription {
+//   id     String @id @default(uuid())
+//   userId String @unique // One active subscription per user
+//   user   User   @relation(fields: [userId], references: [id])
+
+//   planId String
+//   plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+//   startDate DateTime  @default(now())
+//   endDate   DateTime? // Null means lifetime or indefinite if logic dictates
+//   isActive  Boolean   @default(true)
+//   autoRenew Boolean   @default(false)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+// }
+
+// model Payment {
+//   id           String        @id @default(uuid())
+//   userId       String
+//   user         User          @relation(fields: [userId], references: [id])
+//   amount       Int
+//   currency     String        @default("RUB")
+//   status       PaymentStatus @default(PENDING)
+//   provider     String // e.g., "stripe", "yookassa"
+//   providerTxId String? // Transaction ID from the provider
+//   metadata     Json?
+
+//   createdAt   DateTime     @default(now())
+//   updatedAt   DateTime     @updatedAt
+//   booking     Booking?     @relation(fields: [bookingId], references: [id])
+//   bookingId   String?
+//   paidRequest PaidRequest?
+// }
+
+// // model Payment {
+// //   id         String   @id @default(cuid())
+// //   user_id    String
+// //   booking_id String?
+// //   amount     Float
+// //   status     String // e.g., 'succeeded', 'failed'
+// //   created_at DateTime @default(now())
+
+// //   user    User     @relation(fields: [user_id], references: [id])
+// //   booking Booking? @relation(fields: [booking_id], references: [id])
+// // }
+
+// model Account {
+//   id                String  @id @default(cuid())
+//   userId            String
+//   type              String
+//   provider          String
+//   providerAccountId String
+//   refresh_token     String? @db.Text
+//   access_token      String? @db.Text
+//   expires_at        Int?
+//   token_type        String?
+//   scope             String?
+//   id_token          String? @db.Text
+//   session_state     String?
+
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   @@unique([provider, providerAccountId])
+// }
+
+// model Session {
+//   id           String   @id @default(cuid())
+//   userId       String
+//   expires      DateTime
+//   sessionToken String   @unique
+//   accessToken  String   @unique
+//   createdAt    DateTime @default(now())
+//   updatedAt    DateTime @updatedAt
+//   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+// }
+
+// model VerificationToken {
+//   id         String    @id @default(cuid())
+//   identifier String?
+//   userId     String?
+//   token      String    @unique
+//   expires    DateTime?
+//   user       User?     @relation(fields: [userId], references: [id])
+
+//   @@unique([identifier, token])
+// }
+
 generator client {
   provider        = "prisma-client"
   output          = "../generated/prisma"
@@ -19,6 +510,8 @@ enum NotificationType {
   BOOKING_REQUEST
   BOOKING_UPDATE
   SYSTEM
+  PARTNER_REQUEST
+  PARTNER_UPDATE
 }
 
 enum SubscriptionTier {
@@ -32,6 +525,13 @@ enum PaymentStatus {
   COMPLETED
   FAILED
   REFUNDED
+}
+
+enum Status {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }
 
 model User {
@@ -56,7 +556,6 @@ model User {
   subscription_plan_id        String?   @default("econom")
   subscription_end_date       DateTime?
   moderation_status           String    @default("pending_approval")
-  // parent_agency_id            String?
   sub_profile_ids             String[]
   created_at                  DateTime  @default(now())
   updated_at                  DateTime  @updatedAt
@@ -73,11 +572,7 @@ model User {
   resetPasswordExpires        DateTime?
   favorite_performers         Json?
 
-  // Fields for Partner role
-  balance         Float?
-  total_earned    Float?
-  referral_id     String? @unique
-  payment_details String?
+  partner_profile Partner?
 
   reviews_written       Review[]      @relation("CustomerReviews")
   reviews_received      Review[]      @relation("PerformerReviews")
@@ -86,31 +581,50 @@ model User {
   paid_requests         PaidRequest[]
   gallery_items         GalleryItem[]
 
-  support_requests_as_requester SupportRequest[]       @relation("RequesterSupport")
-  support_requests_as_manager   SupportRequest[]       @relation("ManagerSupport")
-  referral_events_as_partner    ReferralEvent[]        @relation("PartnerReferral")
-  referral_events_as_referred   ReferralEvent[]        @relation("ReferredUser")
-  favorites_given               Favorite[]             @relation("CustomerFavorites")
-  favorites_received            Favorite[]             @relation("PerformerFavorites")
-  certificates                  Certificate[]
-  recommendation_letters        RecommendationLetter[]
-  prompts                       Prompt[]
-  chats                         Chat[]                 @relation("ChatParticipants")
-  messages                      Message[]
-  notifications                 Notification[]
-  payout_requests               PayoutRequest[]
-  subscription                  UserSubscription?
-  payments                      Payment[]
-  accounts                      Account[]
-  sessions                      Session[]
-  verificationTokens            VerificationToken[]
+  support_requests_as_requester SupportRequest[] @relation("RequesterSupport")
+  support_requests_as_manager   SupportRequest[] @relation("ManagerSupport")
+
+  // partner referral events removed, only keeping the referred user relation
+  referral_events_as_referred ReferralEvent[] @relation("ReferredUser")
+
+  favorites_given        Favorite[]             @relation("CustomerFavorites")
+  favorites_received     Favorite[]             @relation("PerformerFavorites")
+  certificates           Certificate[]
+  recommendation_letters RecommendationLetter[]
+  prompts                Prompt[]
+  chats                  Chat[]                 @relation("ChatParticipants")
+  messages               Message[]
+  notifications          Notification[]
+  subscription           UserSubscription?
+  payments               Payment[]
+  accounts               Account[]
+  sessions               Session[]
+  verificationTokens     VerificationToken[]
 
   parentAgencyId String?
   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
   subProfiles    User[]  @relation("AgencySpecialists")
+}
 
-  // parent_agency User?  @relation("SubAgencies", fields: [parent_agency_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  // sub_agencies  User[] @relation("SubAgencies")
+model Partner {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  referralId           String  @unique
+  balance              Float   @default(0)
+  totalEarned          Float   @default(0)
+  totalRegistrations   Int     @default(0)
+  totalPaidConversions Int     @default(0)
+  clicks               Int     @default(0)
+  minPayout            Float   @default(1500)
+  paymentDetails       String? @db.Text
+
+  referralEvents ReferralEvent[]
+  payoutRequests PayoutRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Review {
@@ -132,7 +646,6 @@ model Booking {
   details String?
   status  BookingStatus @default(PENDING)
 
-  // Relations
   customerId String
   customer   User   @relation("CustomerBookings", fields: [customerId], references: [id])
 
@@ -144,11 +657,21 @@ model Booking {
   Payment   Payment[]
 }
 
+model PartnershipRequest {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  website   String
+  status    Status   @default(PENDING)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Notification {
   id        String           @id @default(uuid())
   userId    String
   user      User             @relation(fields: [userId], references: [id])
-  type      NotificationType // e.g., BOOKING_REQUEST, BOOKING_ACCEPTED, BOOKING_REJECTED
+  type      NotificationType
   message   String
   data      Json?
   link      String?
@@ -163,10 +686,9 @@ model PaidRequest {
 
   category           String
   serviceDescription String
-  city               String? // Optional: null implies Remote/Online
+  city               String?
   budget             String?
 
-  // Status flow: PENDING_PAYMENT -> OPEN -> CLOSED
   status String @default("PENDING_PAYMENT")
 
   paymentId String?  @unique
@@ -200,25 +722,20 @@ model Chat {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // A chat can have multiple participants (usually 2 for direct messages)
-  participants User[] @relation("ChatParticipants")
-
-  // Relation to messages
+  participants    User[]          @relation("ChatParticipants")
   messages        Message[]
   support_request SupportRequest?
 }
 
 model Message {
   id        String   @id @default(cuid())
-  content   String // Text content or file URL
+  content   String
   createdAt DateTime @default(now())
   isRead    Boolean  @default(false)
 
-  // Relation to Chat
   chatId String
   chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
-  // Relation to Sender
   senderId String
   sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
@@ -247,8 +764,22 @@ model ReferralEvent {
   status            String?  @default("pending")
   created_at        DateTime @default(now())
 
-  partner       User @relation("PartnerReferral", fields: [partner_id], references: [id])
-  referred_user User @relation("ReferredUser", fields: [referred_user_id], references: [id])
+  //  Partner ID now correctly points to Partner model
+  partner       Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
+  referred_user User    @relation("ReferredUser", fields: [referred_user_id], references: [id], onDelete: Cascade)
+}
+
+model PayoutRequest {
+  id              String   @id @default(cuid())
+  partner_id      String
+  amount          Float
+  status          String   @default("pending")
+  payment_details String?  @db.Text
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  // Partner ID now correctly points to Partner model
+  partner Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
 }
 
 model Favorite {
@@ -266,7 +797,7 @@ model Favorite {
 model Article {
   id               String   @id @default(uuid())
   title            String
-  content          String   @db.Text // Stores HTML from Tiptap
+  content          String   @db.Text
   slug             String   @unique
   media_url        String?
   media_type       String?
@@ -274,52 +805,30 @@ model Article {
   image_alt_text   String?
   meta_description String?
   keywords         String?
-  isActive         Boolean  @default(false) // Draft vs Published
+  isActive         Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
 
-// model SiteSettings {
-//   id            String   @id @default("general_settings") // Single row approach
-//   settings_data Json? // Stores: siteName, logoUrl, theme, contacts, categories, etc.
-//   updated_at    DateTime @updatedAt
-// }
-
 model SiteSettings {
-  id String @id @default("general_settings")
-
-  // --- 1. General Settings ---
+  id          String  @id @default("general_settings")
   siteName    String  @default("Eventomir")
   logoUrl     String?
   logoAltText String?
   faviconUrl  String?
   fontFamily  String  @default("Inter, sans-serif")
+  contacts    Json?   @default("{}")
+  theme       Json?   @default("{\"backgroundColor\": \"#ffffff\", \"primaryColor\": \"#3b82f6\", \"accentColor\": \"#f59e0b\"}")
 
-  // --- 2. Nested Objects (Stored as JSON) ---
-
-  // Stores: { email: string, phone: string, vkLink: string, telegramLink: string }
-  contacts Json? @default("{}")
-
-  // Stores: { backgroundColor: string, primaryColor: string, accentColor: string }
-  theme Json? @default("{\"backgroundColor\": \"#ffffff\", \"primaryColor\": \"#3b82f6\", \"accentColor\": \"#f59e0b\"}")
-
-  // --- 3. Arrays (Stored as JSON) ---
-
-  // Stores: Array<{ id: string, name: string, icon: string }>
-  siteCategories Json @default("[]")
-
-  // Stores: Array<{ path: string, title: string, description: string, keywords: string }>
+  siteCategories  Json @default("[]")
   pageSpecificSEO Json @default("[]")
 
-  // --- 4. Metadata ---
   updatedAt DateTime @updatedAt
-
-  @@map("site_settings")
 }
 
 model PricingConfig {
-  id          String   @id @default("pricing_config") // Single row approach
-  config_data Json? // Stores: plans array, paidRequestPrice
+  id          String   @id @default("pricing_config")
+  config_data Json?
   updated_at  DateTime @updatedAt
 }
 
@@ -356,28 +865,16 @@ model Prompt {
   user User @relation(fields: [userId], references: [id])
 }
 
-model PayoutRequest {
-  id              String   @id @default(cuid())
-  partner_id      String
-  amount          Float
-  status          String   @default("pending") // pending, completed, rejected
-  payment_details String?
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
-
-  partner User @relation(fields: [partner_id], references: [id])
-}
-
 model SubscriptionPlan {
   id              String           @id @default(uuid())
   name            String
   description     String
   tier            SubscriptionTier @unique
   priceMonthly    Int              @default(0)
-  priceHalfYearly Int?             @default(0) // 6 Months
-  priceYearly     Int?             @default(0) // 12 Months
+  priceHalfYearly Int?             @default(0)
+  priceYearly     Int?             @default(0)
 
-  features  String[] // Stored as array of strings
+  features  String[]
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -387,14 +884,14 @@ model SubscriptionPlan {
 
 model UserSubscription {
   id     String @id @default(uuid())
-  userId String @unique // One active subscription per user
+  userId String @unique
   user   User   @relation(fields: [userId], references: [id])
 
   planId String
   plan   SubscriptionPlan @relation(fields: [planId], references: [id])
 
   startDate DateTime  @default(now())
-  endDate   DateTime? // Null means lifetime or indefinite if logic dictates
+  endDate   DateTime?
   isActive  Boolean   @default(true)
   autoRenew Boolean   @default(false)
 
@@ -409,8 +906,8 @@ model Payment {
   amount       Int
   currency     String        @default("RUB")
   status       PaymentStatus @default(PENDING)
-  provider     String // e.g., "stripe", "yookassa"
-  providerTxId String? // Transaction ID from the provider
+  provider     String
+  providerTxId String?
   metadata     Json?
 
   createdAt   DateTime     @default(now())
@@ -419,18 +916,6 @@ model Payment {
   bookingId   String?
   paidRequest PaidRequest?
 }
-
-// model Payment {
-//   id         String   @id @default(cuid())
-//   user_id    String
-//   booking_id String?
-//   amount     Float
-//   status     String // e.g., 'succeeded', 'failed'
-//   created_at DateTime @default(now())
-
-//   user    User     @relation(fields: [user_id], references: [id])
-//   booking Booking? @relation(fields: [booking_id], references: [id])
-// }
 
 model Account {
   id                String  @id @default(cuid())

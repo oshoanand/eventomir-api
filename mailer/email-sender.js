@@ -172,8 +172,85 @@ const sendResetPasswordLinkEmail = async (link, toEmail, userName) => {
   }
 };
 
+/**
+ * Sends a welcome/confirmation email to a prospective partner.
+ * @param {string} toEmail - The prospective partner's email address.
+ * @param {string} userName - The prospective partner's name.
+ */
+const sendPartnerWelcomeEmail = async (toEmail, userName) => {
+  try {
+    // 1. Load and populate the HTML template
+    const htmlEmail = getTemplate("partner-welcome-email", {
+      name: userName,
+    });
+
+    // 2. Define email options
+    const mailOptions = {
+      from: `"Eventomir Partners" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: "Ваша заявка на партнерство получена | Eventomir",
+      html: htmlEmail,
+    };
+
+    // 3. Send the email
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `Partner welcome email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendPartnerWelcomeEmail:", error);
+    // We don't want to crash the request flow if the email fails,
+    // so we return false instead of throwing.
+    return false;
+  }
+};
+
+/**
+ * Sends an approval email with login credentials to the new partner.
+ * @param {string} toEmail - The partner's email address.
+ * @param {string} userName - The partner's name.
+ * @param {string} tempPassword - The auto-generated temporary password.
+ */
+const sendPartnerApprovalEmail = async (toEmail, userName, tempPassword) => {
+  try {
+    // The URL where partners log in (e.g., your Partner Dashboard project URL)
+    const loginLink = `${process.env.PARTNER_DASHBOARD_URL || process.env.WEB_APP_URL}/login`;
+
+    // 1. Load and populate the HTML template
+    const htmlEmail = getTemplate("partner-approval-email", {
+      name: userName,
+      email: toEmail,
+      password: tempPassword,
+      loginLink: loginLink,
+    });
+
+    // 2. Define email options
+    const mailOptions = {
+      from: `"Eventomir Partners" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: "Ваша заявка одобрена! Доступы в кабинет партнера",
+      html: htmlEmail,
+    };
+
+    // 3. Send the email
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `Partner approval email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendPartnerApprovalEmail:", error);
+    return false; // Return false so it doesn't crash the admin approval flow
+  }
+};
+
 export {
   sendVerificationEmail,
   sendModerationStatusEmail,
   sendResetPasswordLinkEmail,
+  sendPartnerWelcomeEmail,
+  sendPartnerApprovalEmail,
 };

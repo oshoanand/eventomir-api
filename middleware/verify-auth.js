@@ -16,7 +16,6 @@ function extractToken(req) {
 export const verifyAuth = async (req, res, next) => {
   const token = extractToken(req);
 
-  // console.log(token);
   if (!token) {
     return res.status(401).json({ error: "Unauthorized access " });
   }
@@ -25,6 +24,7 @@ export const verifyAuth = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.SECRET, {
       algorithms: "HS256",
     });
+    console.log(decoded.role);
 
     // console.log(decoded.role);
     // 2. CRITICAL FIX: Attach the user ID to the request object

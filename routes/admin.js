@@ -2,10 +2,14 @@ import { Router } from "express";
 import * as adminService from "../controllers/admin.js";
 import prisma from "../libs/prisma.js";
 import { invalidatePattern } from "../middleware/redis.js";
-import { sendModerationStatusEmail } from "../mailer/email-sender.js";
+import {
+  sendModerationStatusEmail,
+  sendPartnerApprovalEmail,
+} from "../mailer/email-sender.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { requireRole } from "../middleware/role-check.js";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const router = Router();
 
@@ -356,6 +360,117 @@ router.delete(
     } catch (error) {
       console.error("Delete booking error:", error);
       res.status(500).json({ message: "Error deleting booking" });
+    }
+  },
+);
+
+router.get(
+  "/partnership-requests",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    const requests = await prisma.partnershipRequest.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(requests);
+  },
+);
+
+// PUT /api/admin/partnership-requests/:id/status
+router.patch(
+  "/partnership-requests/:id/status",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      if (!["APPROVED", "REJECTED"].includes(status)) {
+        return res.status(400).json({ message: "Некорректный статус" });
+      }
+
+      // 1. Get the current request
+      const request = await prisma.partnershipRequest.findUnique({
+        where: { id },
+      });
+      if (!request)
+        return res.status(404).json({ message: "Заявка не найдена" });
+
+      // 2. Update the request status
+      const updatedRequest = await prisma.partnershipRequest.update({
+        where: { id },
+        data: { status },
+      });
+
+      // 3. Complete the Approval Workflow
+      if (status === "APPROVED") {
+        // Check if user already exists (just in case they registered normally before)
+        let user = await prisma.user.findUnique({
+          where: { email: request.email },
+        });
+        let tempPassword = null;
+
+        if (!user) {
+          // A: Generate a random 10-character password
+          // tempPassword = crypto.randomBytes(5).toString("hex");
+          tempPassword = "Test1234";
+          const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+          // B: Create the User account with role "partner"
+          user = await prisma.user.create({
+            data: {
+              email: request.email,
+              password: hashedPassword,
+              name: request.name,
+              role: "partner",
+              status: "active",
+            },
+          });
+
+          // C: Generate a unique referral ID (e.g., REF-IVAN1234)
+          const namePrefix = request.name
+            .substring(0, 4)
+            .toUpperCase()
+            .replace(/[^A-Z]/g, "P");
+          const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+          const referralId = `REF-${namePrefix}${randomSuffix}`;
+
+          // D: Create the specific Partner Profile/Dashboard record
+          // (Assuming you have a Partner model linked to User)
+          await prisma.partner.create({
+            data: {
+              userId: user.id,
+              referralId: referralId,
+              balance: 0,
+              minPayout: 1500, // example minimum payout
+            },
+          });
+
+          // E: Send the Email with the temporary password
+          await sendPartnerApprovalEmail(
+            request.email,
+            request.name,
+            tempPassword,
+          );
+        } else {
+          // If the user already exists, just update their role to partner
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { role: "partner" },
+          });
+
+          // Send a generic approval email without a temporary password,
+          // telling them to use their existing credentials.
+          // await sendPartnerApprovalEmailWithoutPassword(...) (Optional implementation)
+        }
+      }
+
+      res.status(200).json({
+        message: `Заявка успешно ${status === "APPROVED" ? "одобрена" : "отклонена"}`,
+        data: updatedRequest,
+      });
+    } catch (error) {
+      console.error("Error updating partnership status:", error);
+      res.status(500).json({ message: "Внутренняя ошибка сервера" });
     }
   },
 );

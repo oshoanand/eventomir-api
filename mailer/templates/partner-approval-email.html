@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ваша заявка одобрена | Eventomir</title>
+    <style>
+      body {
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        background-color: #f9fafb;
+        margin: 0;
+        padding: 0;
+        color: #111827;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+      }
+      .header {
+        background-color: #10b981;
+        padding: 24px;
+        text-align: center;
+        color: #ffffff;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: bold;
+      }
+      .content {
+        padding: 32px;
+        line-height: 1.6;
+      }
+      .content h2 {
+        margin-top: 0;
+        font-size: 20px;
+        color: #1f2937;
+      }
+      .credentials {
+        background-color: #f3f4f6;
+        padding: 16px;
+        border-radius: 6px;
+        margin: 20px 0;
+        font-family: monospace;
+        font-size: 16px;
+      }
+      .footer {
+        background-color: #f3f4f6;
+        padding: 16px;
+        text-align: center;
+        font-size: 12px;
+        color: #6b7280;
+      }
+      .button {
+        display: inline-block;
+        padding: 12px 24px;
+        margin-top: 10px;
+        background-color: #10b981;
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: bold;
+        text-align: center;
+      }
+      .warning {
+        font-size: 12px;
+        color: #ef4444;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Поздравляем! 🎉</h1>
+      </div>
+      <div class="content">
+        <h2>Здравствуйте, {{name}}!</h2>
+        <p>
+          Ваша заявка на участие в партнерской программе Eventomir была
+          <strong>успешно одобрена</strong>.
+        </p>
+        <p>
+          Мы создали для вас личный кабинет партнера. В нем вы найдете свою
+          уникальную реферальную ссылку и подробную статистику.
+        </p>
+
+        <p><strong>Ваши данные для входа:</strong></p>
+        <div class="credentials">
+          Email: <strong>{{email}}</strong><br />
+          Временный пароль: <strong>{{password}}</strong>
+        </div>
+
+        <p class="warning">
+          Пожалуйста, смените пароль в настройках профиля после первого входа.
+        </p>
+
+        <div style="text-align: center">
+          <a href="{{loginLink}}" class="button">Перейти в личный кабинет</a>
+        </div>
+
+        <p style="margin-top: 30px">
+          Желаем успешного сотрудничества и высоких конверсий!
+        </p>
+        <p>С уважением,<br />Команда Eventomir Partners</p>
+      </div>
+      <div class="footer">&copy; 2026 Eventomir. Все права защищены.</div>
+    </div>
+  </body>
+</html>
