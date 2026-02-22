@@ -10,29 +10,27 @@ const photoUploader = createUploader("sitesettings");
 // --- CONSTANTS ---
 const SETTINGS_ID = "general_settings";
 
-// --- DEFAULTS (For fallback) ---
 const defaultSettings = {
   siteName: "Eventomir",
   logoUrl: "",
-  logoAltText: "",
+  logoAltText: "Eventomir Логотип",
   faviconUrl: "",
-  fontFamily: "Inter, sans-serif",
-  contacts: { email: "", phone: "", vkLink: "", telegramLink: "" },
+  fontFamily: "Arial, Helvetica, sans-serif",
+  contacts: {
+    email: "",
+    phone: "",
+    vkLink: "",
+    telegramLink: "",
+  },
   theme: {
-    backgroundColor: "#ffffff",
-    primaryColor: "#000000",
-    accentColor: "#3b82f6",
+    preset: "classic", // We will define "classic" in the frontend registry
+    radius: "0.5rem", // Matches --radius: 0.5rem in globals.css
   },
   siteCategories: [],
   pageSpecificSEO: [],
 };
 
 // --- ROUTES ---
-
-/**
- * GET /api/settings/general
- * Retrieve general site settings for Admin Panel
- */
 router.get("/general", async (req, res, next) => {
   try {
     let settings = await prisma.siteSettings.findUnique({
@@ -40,7 +38,6 @@ router.get("/general", async (req, res, next) => {
     });
 
     if (!settings) {
-      // Create with defaults if not exists
       settings = await prisma.siteSettings.create({
         data: {
           id: SETTINGS_ID,
@@ -56,7 +53,9 @@ router.get("/general", async (req, res, next) => {
 
     res.json(settings);
   } catch (error) {
-    next(error);
+    console.error("Error fetching settings:", error);
+    // Fallback: send defaults even if DB fails, so site doesn't crash
+    res.json(defaultSettings);
   }
 });
 
