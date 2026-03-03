@@ -24,6 +24,7 @@ import paymentRoutes from "./routes/payment.js";
 import tarrifPlanRoutes from "./routes/subscription-plan.js";
 import chatRoutes from "./routes/chat.js";
 import partnerRoutes from "./routes/partner.js";
+import eventRoutes from "./routes/event.js";
 
 // Services
 //import setupTTL from "./utils/ttl-service.js";
@@ -129,6 +130,7 @@ async function initializeExpressServer() {
   app.use("/api/tariff/plans", tarrifPlanRoutes);
   app.use("/api/users", userRoutes);
   app.use("/api/partners", partnerRoutes);
+  app.use("/api/events", eventRoutes);
 
   // --- Server Start ---
 

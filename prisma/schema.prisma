@@ -604,6 +604,7 @@ model User {
   parentAgencyId String?
   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
   subProfiles    User[]  @relation("AgencySpecialists")
+  events         Event[]
 }
 
 model Partner {
@@ -956,4 +957,21 @@ model VerificationToken {
   user       User?     @relation(fields: [userId], references: [id])
 
   @@unique([identifier, token])
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  category    String
+  price       Float    @default(0)
+  date        DateTime
+  city        String
+  imageUrl    String
+  description String?  @db.Text
+
+  hostId String?
+  host   User?   @relation(fields: [hostId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
