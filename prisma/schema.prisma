@@ -605,6 +605,7 @@ model User {
   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
   subProfiles    User[]  @relation("AgencySpecialists")
   events         Event[]
+  orders         Order[]
 }
 
 model Partner {
@@ -960,17 +961,41 @@ model VerificationToken {
 }
 
 model Event {
-  id          String   @id @default(cuid())
-  title       String
-  category    String
-  price       Float    @default(0)
-  date        DateTime
-  city        String
-  imageUrl    String
-  description String?  @db.Text
+  id               String   @id @default(cuid())
+  title            String
+  category         String
+  price            Float    @default(0)
+  date             DateTime
+  time             String?
+  city             String
+  address          String?
+  imageUrl         String
+  description      String?  @db.Text
+  totalTickets     Int      @default(0)
+  availableTickets Int      @default(0)
+  status           String   @default("active")
 
   hostId String?
   host   User?   @relation(fields: [hostId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+}
+
+model Order {
+  id      String @id @default(cuid())
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  ticketCount   Int
+  totalPrice    Float
+  status        String  @default("pending") // "pending", "cancelled",  "completed", "refunded"
+  paymentId     String?
+  paymentMethod String  @default("card")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

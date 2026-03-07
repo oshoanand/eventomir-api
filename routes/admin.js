@@ -9,7 +9,6 @@ import {
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { requireRole } from "../middleware/role-check.js";
 import bcrypt from "bcryptjs";
-import crypto from "crypto";
 
 const router = Router();
 

@@ -247,10 +247,54 @@ const sendPartnerApprovalEmail = async (toEmail, userName, tempPassword) => {
   }
 };
 
+/**
+ * Sends an email with the attached PDF ticket.
+ * @param {string} toEmail - The buyer's email address.
+ * @param {string} userName - The buyer's name.
+ * @param {string} eventName - The name of the event.
+ * @param {Buffer} pdfBuffer - The generated PDF file in memory.
+ */
+const sendTicketEmail = async (toEmail, userName, eventName, pdfBuffer) => {
+  try {
+    // Note: You must create a 'ticket-email.html' inside your templates folder.
+    // E.g. "<h1>Hello {{name}}, here are your tickets for {{eventName}}!</h1>"
+    const htmlEmail = getTemplate("ticket-email", {
+      name: userName || "Гость",
+      eventName: eventName,
+    });
+
+    const mailOptions = {
+      from: `"Eventomir Tickets" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `Ваши билеты на мероприятие: ${eventName}`,
+      html: htmlEmail,
+      attachments: [
+        {
+          filename: `Ticket_${eventName.replace(/\s+/g, "_")}.pdf`,
+          content: pdfBuffer, // Attach the memory buffer directly
+          contentType: "application/pdf",
+        },
+      ],
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `Ticket email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendTicketEmail:", error);
+    // Return false so we don't crash the server if email fails
+    return false;
+  }
+};
+
 export {
   sendVerificationEmail,
   sendModerationStatusEmail,
   sendResetPasswordLinkEmail,
   sendPartnerWelcomeEmail,
   sendPartnerApprovalEmail,
+  sendTicketEmail,
 };
