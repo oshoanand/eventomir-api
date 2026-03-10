@@ -601,11 +601,13 @@ model User {
   sessions               Session[]
   verificationTokens     VerificationToken[]
 
-  parentAgencyId String?
-  parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
-  subProfiles    User[]  @relation("AgencySpecialists")
-  events         Event[]
-  orders         Order[]
+  parentAgencyId  String?
+  parentAgency    User?            @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
+  subProfiles     User[]           @relation("AgencySpecialists")
+  events          Event[]
+  orders          Order[]
+  articleComments ArticleComment[]
+  articleLikes    ArticleLike[]
 }
 
 model Partner {
@@ -796,22 +798,6 @@ model Favorite {
   @@unique([customer_id, performer_id])
 }
 
-model Article {
-  id               String   @id @default(uuid())
-  title            String
-  content          String   @db.Text
-  slug             String   @unique
-  media_url        String?
-  media_type       String?
-  meta_title       String?
-  image_alt_text   String?
-  meta_description String?
-  keywords         String?
-  isActive         Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-}
-
 model SiteSettings {
   id          String  @id @default("general_settings")
   siteName    String  @default("Eventomir")
@@ -999,4 +985,51 @@ model Order {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Article {
+  id               String   @id @default(uuid())
+  title            String
+  content          String   @db.Text
+  slug             String   @unique
+  media_url        String?
+  media_type       String?
+  meta_title       String?
+  image_alt_text   String?
+  meta_description String?
+  keywords         String?
+  isActive         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  comments ArticleComment[]
+  likes    ArticleLike[]
+}
+
+model ArticleComment {
+  id        String   @id @default(uuid())
+  content   String   @db.Text
+  status    String   @default("pending") // "pending", "approved", "rejected"
+  createdAt DateTime @default(now())
+
+  articleId String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Self-relation for nested replies
+  parentId String?
+  parent   ArticleComment?  @relation("NestedComments", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  ArticleComment[] @relation("NestedComments")
+}
+
+model ArticleLike {
+  id        String  @id @default(uuid())
+  articleId String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, userId]) // A user can only like a specific article once
 }
