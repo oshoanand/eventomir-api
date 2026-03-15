@@ -26,6 +26,9 @@ import chatRoutes from "./routes/chat.js";
 import partnerRoutes from "./routes/partner.js";
 import eventRoutes from "./routes/event.js";
 import orderRoutes from "./routes/order.js";
+import searchRoutes from "./routes/search.js";
+
+import reviewsRoutes from "./routes/reviews.js";
 
 // Services
 //import setupTTL from "./utils/ttl-service.js";
@@ -133,6 +136,8 @@ async function initializeExpressServer() {
   app.use("/api/partners", partnerRoutes);
   app.use("/api/events", eventRoutes);
   app.use("/api/orders", orderRoutes);
+  app.use("/api/search", searchRoutes);
+  app.use("/api/reviews", reviewsRoutes);
 
   // --- Server Start ---
 

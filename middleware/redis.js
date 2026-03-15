@@ -4,7 +4,7 @@ import "dotenv/config";
 
 const DEFAULT_TTL = 3600 * 24 * 2; // 2 day
 
-// 1. Initialize Redis with fail-safe retry strategy
+//  Initialize Redis with fail-safe retry strategy
 const redis = new Redis({
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: process.env.REDIS_PORT || 6379,
@@ -17,6 +17,23 @@ const redis = new Redis({
     return Math.min(times * 100, 3000);
   },
 });
+
+export const CHANNELS = {
+  EVENTS: "app_events_stream",
+};
+
+/**
+ * Helper to publish events to Redis so the Socket server can broadcast them
+ */
+export const publishEvent = async (type, payload) => {
+  try {
+    const eventData = JSON.stringify({ type, payload });
+    await redis.publish(CHANNELS.EVENTS, eventData);
+  } catch (err) {
+    console.error("Redis Publish Error:", err);
+  }
+};
+
 redis.on("error", (err) => {
   // Prevent unhandled error crashes
   console.error("Redis Client Error", err.message);
