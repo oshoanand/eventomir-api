@@ -43,6 +43,13 @@ enum Status {
   CANCELLED
 }
 
+enum WalletType {
+  PAYMENT
+  TOPUP
+  REFUND
+  PAYOUT
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -132,6 +139,10 @@ model User {
   orders          Order[]
   articleComments ArticleComment[]
   articleLikes    ArticleLike[]
+
+  // Wallet Fields
+  walletBalance      Float               @default(0)
+  walletTransactions WalletTransaction[]
 }
 
 model Account {
@@ -582,4 +593,16 @@ model PartnershipRequest {
   status    Status   @default(PENDING)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model WalletTransaction {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amount      Float // Use negative numbers for payments, positive for top-ups
+  type        WalletType // "PAYMENT", "TOPUP", "REFUND", "PAYOUT"
+  description String     @db.Text
+
+  createdAt DateTime @default(now())
 }

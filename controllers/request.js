@@ -1,237 +1,255 @@
 import prisma from "../libs/prisma.js";
-import { createPaymentIntent } from "../services/payment-gateway.js";
+import { sendNotification } from "../services/socket.js";
+import { initTinkoffRequestPayment } from "../utils/tinkoff.js";
 
-// --- Create Request (Initiate Payment) ---
+// Fixed price for publishing a request (in RUB)
+const REQUEST_PRICE = 500;
+
+// ==========================================
+// HELPER: Targeted Notifications
+// ==========================================
+export const notifyTargetedPerformers = async (requestData, customerName) => {
+  try {
+    // Find active performers matching the exact category AND city
+    const targetPerformers = await prisma.user.findMany({
+      where: {
+        role: "performer",
+        status: "active",
+        roles: { has: requestData.category },
+        city: requestData.city,
+      },
+      select: { id: true },
+    });
+
+    if (targetPerformers.length === 0) return;
+
+    const msg = `Новый заказ в г. ${requestData.city}: ${requestData.category} (Бюджет: ${requestData.budget || "не указан"})`;
+
+    // Dispatch real-time socket/redis notifications asynchronously
+    const promises = targetPerformers.map((performer) =>
+      sendNotification(performer.id, "SYSTEM", msg, {
+        requestId: requestData.id,
+        link: `/requests/${requestData.id}`,
+      }),
+    );
+
+    await Promise.all(promises);
+    console.log(
+      `✅ Notified ${targetPerformers.length} performers in ${requestData.city}`,
+    );
+  } catch (error) {
+    console.error("❌ Error notifying performers:", error);
+  }
+};
+
+// ==========================================
+// 1. CREATE PAID REQUEST (Wallet or Gateway)
+// ==========================================
 export const createPaidRequest = async (req, res) => {
   try {
-    const { customerId, category, serviceDescription, budget, city } = req.body;
+    // SECURITY: Always use ID & Email from the verified JWT token
+    const customerId = req.user.id;
+    const customerEmail = req.user.email;
+    const { category, serviceDescription, budget, city, paymentMethod } =
+      req.body;
 
-    // 1. Validation
-    if (!customerId || !category || !serviceDescription) {
+    if (!category || !serviceDescription || !city || !paymentMethod) {
       return res.status(400).json({ message: "Missing required fields." });
     }
 
-    // 2. Get Fixed Price (In a real app, fetch from DB/Config)
-    const REQUEST_PRICE = 490; // 490 RUB
+    // ----------------------------------------------------
+    // SCENARIO A: PAY WITH WALLET (Atomic Transaction)
+    // ----------------------------------------------------
+    if (paymentMethod === "wallet") {
+      const requestRecord = await prisma.$transaction(async (tx) => {
+        // 1. Lock the user row and check balance
+        const user = await tx.user.findUnique({ where: { id: customerId } });
 
-    // 3. Create Payment Record (PENDING)
-    const payment = await prisma.payment.create({
-      data: {
-        userId: customerId,
-        amount: REQUEST_PRICE,
-        status: "PENDING",
-        provider: "mock-provider",
-        // Metadata helps the webhook know what this payment is for
-        metadata: {
-          type: "PAID_REQUEST",
+        if (user.walletBalance < REQUEST_PRICE) {
+          throw new Error("INSUFFICIENT_FUNDS");
+        }
+
+        // 2. Deduct Balance safely
+        await tx.user.update({
+          where: { id: customerId },
+          data: { walletBalance: { decrement: REQUEST_PRICE } },
+        });
+
+        // 3. Create Ledger Entry
+        await tx.walletTransaction.create({
+          data: {
+            userId: customerId,
+            amount: -REQUEST_PRICE,
+            type: "PAYMENT",
+            description: `Оплата публикации заявки: ${category} в г. ${city}`,
+          },
+        });
+
+        // 4. Create the Request (Status: OPEN immediately)
+        const newReq = await tx.paidRequest.create({
+          data: {
+            customerId,
+            category,
+            serviceDescription,
+            city,
+            budget,
+            status: "OPEN",
+          },
+          include: { customer: { select: { name: true } } },
+        });
+
+        return newReq;
+      });
+
+      // 5. Fire notifications (Outside the transaction to keep DB locks fast)
+      await notifyTargetedPerformers(
+        requestRecord,
+        requestRecord.customer.name,
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: "Оплачено с кошелька и опубликовано!",
+        requiresGateway: false,
+      });
+    }
+
+    // ----------------------------------------------------
+    // SCENARIO B: PAY WITH BANK GATEWAY (TINKOFF)
+    // ----------------------------------------------------
+    if (paymentMethod === "gateway") {
+      let paymentRecord;
+
+      // 1. Create Pending Request & Payment in DB
+      const newRequest = await prisma.paidRequest.create({
+        data: {
+          customerId,
+          category,
+          serviceDescription,
+          city,
+          budget,
+          status: "PENDING_PAYMENT",
         },
-      },
-    });
+      });
 
-    // 4. Create Paid Request Record (PENDING_PAYMENT)
-    // It is NOT visible to performers yet.
-    const newRequest = await prisma.paidRequest.create({
-      data: {
-        customerId,
-        category,
-        serviceDescription,
-        budget,
-        city,
-        status: "PENDING_PAYMENT",
-        paymentId: payment.id,
-      },
-    });
+      paymentRecord = await prisma.payment.create({
+        data: {
+          userId: customerId,
+          amount: REQUEST_PRICE,
+          provider: "tinkoff",
+          status: "PENDING",
+          paidRequest: { connect: { id: newRequest.id } },
+        },
+      });
 
-    // 5. Generate Payment Link
-    // Pass requestId in metadata so webhook can find and activate it
-    const paymentIntent = await createPaymentIntent(REQUEST_PRICE, "RUB", {
-      paymentId: payment.id,
-      requestId: newRequest.id,
-      type: "PAID_REQUEST",
-    });
+      try {
+        // 2. Initialize Tinkoff Session
+        const tinkoffData = await initTinkoffRequestPayment(
+          paymentRecord.id,
+          REQUEST_PRICE,
+          category,
+          customerEmail,
+        );
 
-    // 6. Update Payment with Provider Transaction ID
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { providerTxId: paymentIntent.id },
-    });
+        // 3. Save Tinkoff's TxID to our DB
+        await prisma.payment.update({
+          where: { id: paymentRecord.id },
+          data: { providerTxId: String(tinkoffData.paymentId) },
+        });
 
-    // 7. Return Checkout URL to Frontend
-    res.json({
-      success: true,
-      checkoutUrl: paymentIntent.checkoutUrl,
-    });
+        // 4. Return Checkout URL to Frontend
+        return res.status(201).json({
+          success: true,
+          requiresGateway: true,
+          paymentUrl: tinkoffData.paymentUrl,
+        });
+      } catch (tinkoffError) {
+        // If Tinkoff API fails, mark our internal payment as failed
+        await prisma.payment.update({
+          where: { id: paymentRecord.id },
+          data: { status: "FAILED" },
+        });
+        throw new Error("TINKOFF_INIT_FAILED");
+      }
+    }
+
+    return res.status(400).json({ message: "Invalid payment method." });
   } catch (error) {
+    if (error.message === "INSUFFICIENT_FUNDS") {
+      return res
+        .status(400)
+        .json({ message: "Недостаточно средств на кошельке." });
+    }
+    if (error.message === "TINKOFF_INIT_FAILED") {
+      return res
+        .status(502)
+        .json({ message: "Ошибка шлюза оплаты. Попробуйте позже." });
+    }
+
     console.error("Create Request Error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// --- Get Customer Requests ---
+// ==========================================
+// 2. GET CUSTOMER'S OWN REQUESTS
+// ==========================================
 export const getCustomerRequests = async (req, res) => {
   try {
-    const { customerId } = req.params;
+    // SECURITY: Only fetch requests belonging to the authenticated user
+    const customerId = req.user.id;
 
     const requests = await prisma.paidRequest.findMany({
       where: {
-        customerId,
-        // Only return requests that are active or closed (paid)
-        status: { in: ["OPEN", "CLOSED"] },
+        customerId: customerId,
       },
       orderBy: { createdAt: "desc" },
     });
 
-    res.json(requests);
+    res.status(200).json(requests);
   } catch (error) {
     console.error("Get Customer Requests Error:", error);
     res.status(500).json({ message: "Failed to fetch requests" });
   }
 };
 
-// --- Performer Feed (Public/Protected) ---
+// ==========================================
+// 3. PUBLIC FEED FOR PERFORMERS
+// ==========================================
 export const getRequestsFeed = async (req, res) => {
   try {
     const { roles, city } = req.query;
-
-    // Convert comma-separated roles to array
     const roleList = roles ? roles.split(",") : [];
 
+    // SECURITY: Never expose PENDING_PAYMENT requests to the public feed
     const whereClause = {
-      status: "OPEN", // Only show active, paid requests
+      status: "OPEN",
     };
 
-    // Filter by Category (if roles provided)
     if (roleList.length > 0) {
       whereClause.category = { in: roleList };
     }
 
-    // Filter by City (Optional: Include requests with NO city (Online) + Matching City)
     if (city) {
+      // Include exact city matches OR online/remote requests (city is null)
       whereClause.OR = [
         { city: { equals: city, mode: "insensitive" } },
-        { city: null }, // Remote/Online requests
+        { city: null },
       ];
     }
 
     const requests = await prisma.paidRequest.findMany({
       where: whereClause,
       orderBy: { createdAt: "desc" },
-      take: 50, // Limit feed size
+      take: 50, // Pagination limit to protect server memory
+      include: {
+        customer: { select: { name: true, profile_picture: true } },
+      },
     });
 
-    res.json(requests);
+    res.status(200).json(requests);
   } catch (error) {
     console.error("Feed Error:", error);
     res.status(500).json({ message: "Failed to fetch feed" });
   }
 };
-
-// export const createPaidRequest = async (req, res) => {
-//   try {
-//     // 1. Destructure data from the request body
-//     const { customerId, category, serviceDescription, budget, city } = req.body;
-//     console.log(req.body);
-
-//     // 2. Validate required fields
-//     if (!customerId || !category || !serviceDescription) {
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Missing required fields: customerId, category, or serviceDescription",
-//       });
-//     }
-
-//     // 3. Create the request in the database
-//     // We map camelCase (frontend) to snake_case (database) here
-//     const newRequest = await prisma.paidRequest.create({
-//       data: {
-//         customer_id: customerId,
-//         category: category,
-//         service_description: serviceDescription,
-//         // Handle optional fields: ensure undefined becomes null/undefined for Prisma
-//         budget: budget || null,
-//         city: city || null,
-//         status: "open",
-//         views: 0,
-//         responses: 0,
-//       },
-//     });
-
-//     // 4. Return the created request
-//     // We map snake_case back to camelCase for the frontend response
-//     const formattedRequest = {
-//       id: newRequest.id,
-//       customerId: newRequest.customer_id,
-//       category: newRequest.category,
-//       serviceDescription: newRequest.service_description,
-//       budget: newRequest.budget,
-//       city: newRequest.city,
-//       status: newRequest.status,
-//       views: newRequest.views,
-//       responses: newRequest.responses,
-//       createdAt: newRequest.created_at, // Returns ISO string
-//     };
-
-//     return res.status(201).json({
-//       success: true,
-//       message: "Request created successfully",
-//       request: formattedRequest,
-//     });
-//   } catch (error) {
-//     console.error("Error creating paid request:", error);
-
-//     // Check for Prisma specific error codes
-//     // P2003 = Foreign key constraint failed (e.g., customerId doesn't exist)
-//     if (error.code === "P2003") {
-//       return res.status(404).json({
-//         success: false,
-//         message:
-//           "Customer ID not found. Cannot create request for non-existent user.",
-//       });
-//     }
-
-//     return res.status(500).json({
-//       success: false,
-//       message: "Internal server error while creating request.",
-//     });
-//   }
-// };
-
-// export const getRequestsByCustomer = async (req, res) => {
-//   try {
-//     const { customerId } = req.params;
-
-//     if (!customerId) {
-//       return res.status(400).json({ message: "Customer ID is required" });
-//     }
-
-//     // 1. Fetch from Database
-//     const requests = await prisma.paidRequest.findMany({
-//       where: {
-//         customer_id: customerId,
-//       },
-//       orderBy: {
-//         created_at: "desc", // Sort by newest first
-//       },
-//     });
-
-//     // 2. Map snake_case DB fields to camelCase Frontend fields
-//     const formattedRequests = requests.map((req) => ({
-//       id: req.id,
-//       customerId: req.customer_id,
-//       category: req.category,
-//       serviceDescription: req.service_description, // Mapping here is crucial
-//       city: req.city,
-//       budget: req.budget,
-//       status: req.status,
-//       views: req.views,
-//       responses: req.responses,
-//       createdAt: req.created_at, // Prisma returns Date object, Express serializes to ISO string
-//     }));
-
-//     return res.status(200).json(formattedRequests);
-//   } catch (error) {
-//     console.error("Error fetching customer requests:", error);
-//     return res.status(500).json({ message: "Failed to fetch requests" });
-//   }
-// };

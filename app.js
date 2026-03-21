@@ -27,8 +27,9 @@ import partnerRoutes from "./routes/partner.js";
 import eventRoutes from "./routes/event.js";
 import orderRoutes from "./routes/order.js";
 import searchRoutes from "./routes/search.js";
-
 import reviewsRoutes from "./routes/reviews.js";
+import walletRoutes from "./routes/wallet.js";
+import webhookRoutes from "./routes/webhooks.js";
 
 // Services
 //import setupTTL from "./utils/ttl-service.js";
@@ -108,6 +109,7 @@ async function initializeExpressServer() {
 
         if (allowedDomains.indexOf(origin) === -1) {
           const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+          console.log(msg);
           return callback(new Error(msg), false);
         }
         return callback(null, true);
@@ -138,6 +140,8 @@ async function initializeExpressServer() {
   app.use("/api/orders", orderRoutes);
   app.use("/api/search", searchRoutes);
   app.use("/api/reviews", reviewsRoutes);
+  app.use("/api/wallet", walletRoutes);
+  app.use("/api/webhooks", webhookRoutes);
 
   // --- Server Start ---
 

@@ -28,7 +28,7 @@ export const verifyAuth = async (req, res, next) => {
     // console.log(decoded.role);
     // 2. CRITICAL FIX: Attach the user ID to the request object
     // This allows your controllers to access 'req.user.id'
-    req.user = { id: decoded.id, role: decoded.role };
+    req.user = { id: decoded.id, role: decoded.role, email: decoded.email };
 
     next();
   } catch (err) {

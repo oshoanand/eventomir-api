@@ -8,19 +8,24 @@ import {
 
 const router = express.Router();
 
+// ==========================================
+// 1. CREATE PAID REQUEST (Wallet or Gateway)
 // POST /api/requests
+// ==========================================
 router.post("/", verifyAuth, createPaidRequest);
 
-// Matches the frontend url: `/api/requests/customer/${customerId}`
-// router.get("/customer/:customerId", verifyAuth, getRequestsByCustomer);
+// ==========================================
+// 2. GET MY REQUESTS (Customer Dashboard)
+// GET /api/requests/customer
+// ==========================================
+// 🚨 Security Note: No :customerId in the URL!
+// The controller securely reads req.user.id from the verifyAuth token.
+router.get("/customer", verifyAuth, getCustomerRequests);
 
-// POST /api/requests - Create (Protected)
-router.post("/", verifyAuth, createPaidRequest);
-
-// GET /api/requests/customer/:customerId - My Requests (Protected)
-router.get("/customer/:customerId", verifyAuth, getCustomerRequests);
-
-// GET /api/requests/feed - Feed for Performers (Protected)
+// ==========================================
+// 3. GET PUBLIC FEED (For Performers)
+// GET /api/requests/feed
+// ==========================================
 router.get("/feed", verifyAuth, getRequestsFeed);
 
 export default router;

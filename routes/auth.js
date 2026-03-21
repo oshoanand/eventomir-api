@@ -452,7 +452,6 @@ router.post("/register-performer", async (req, res) => {
 
     const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
-    // Create the user record
     const newUser = await prisma.user.create({
       data: {
         email: performerData.email,
@@ -465,7 +464,7 @@ router.post("/register-performer", async (req, res) => {
         company_name: performerData.companyName,
         inn: performerData.inn,
         moderation_status: "pending_approval",
-        subscription_plan_id: "econom",
+        subscription_plan_id: "FREE",
         profile_picture: defaultImage,
         verificationTokens: {
           create: {
