@@ -1,7 +1,7 @@
 import prisma from "../libs/prisma.js";
 import { initTinkoffSubscriptionPayment } from "../utils/tinkoff.js";
 
-// --- 1. GET ALL PLANS ---
+//  GET ALL PLANS ---
 export const getPlans = async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
@@ -15,7 +15,7 @@ export const getPlans = async (req, res) => {
   }
 };
 
-// --- 2. GET CURRENT SUBSCRIPTION ---
+// GET CURRENT SUBSCRIPTION ---
 export const getCurrentSubscription = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -47,7 +47,7 @@ export const getCurrentSubscription = async (req, res) => {
   }
 };
 
-// --- 3. INITIATE CHECKOUT ---
+//  INITIATE CHECKOUT ---
 export const initiateCheckout = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -124,5 +124,16 @@ export const initiateCheckout = async (req, res) => {
       return res.status(502).json({ message: "Ошибка платежного шлюза." });
     }
     res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const getRequestPrice = async (req, res) => {
+  try {
+    const FIXED_REQUEST_PRICE = 490;
+
+    res.status(200).json({ price: FIXED_REQUEST_PRICE });
+  } catch (error) {
+    console.error("Get Request Price Error:", error);
+    res.status(500).json({ message: "Unable to fetch price" });
   }
 };
