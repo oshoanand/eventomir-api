@@ -36,6 +36,7 @@ const getTemplate = (templateName, data) => {
 
   return htmlContent;
 };
+
 /**
  * Sends a verification email to the user.
  * @param {string} toEmail - The recipient's email address.
@@ -290,6 +291,53 @@ const sendTicketEmail = async (toEmail, userName, eventName, pdfBuffer) => {
   }
 };
 
+/**
+ * Sends an email with the attached PDF receipt for a subscription.
+ * @param {string} toEmail - The buyer's email address.
+ * @param {string} userName - The buyer's name.
+ * @param {string} planName - The name of the purchased subscription plan.
+ * @param {Buffer} pdfBuffer - The generated PDF receipt in memory.
+ */
+const sendSubscriptionReceiptEmail = async (
+  toEmail,
+  userName,
+  planName,
+  pdfBuffer,
+) => {
+  try {
+    // Note: You must create a 'subscription-receipt-email.html' inside your templates folder.
+    const htmlEmail = getTemplate("subscription-receipt-email", {
+      name: userName || "Пользователь",
+      planName: planName,
+    });
+
+    const mailOptions = {
+      from: `"Eventomir Billing" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `Ваша квитанция об оплате подписки: ${planName}`,
+      html: htmlEmail,
+      attachments: [
+        {
+          filename: `Receipt_${planName.replace(/\s+/g, "_")}.pdf`,
+          content: pdfBuffer, // Attach the memory buffer directly
+          contentType: "application/pdf",
+        },
+      ],
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `Subscription receipt email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendSubscriptionReceiptEmail:", error);
+    // Return false so we don't crash the webhook if email fails
+    return false;
+  }
+};
+
 export {
   sendVerificationEmail,
   sendModerationStatusEmail,
@@ -297,4 +345,5 @@ export {
   sendPartnerWelcomeEmail,
   sendPartnerApprovalEmail,
   sendTicketEmail,
+  sendSubscriptionReceiptEmail,
 };
