@@ -9,7 +9,6 @@ import "dotenv/config";
 const router = Router();
 
 // --- HELPER ROUTE FOR ADMIN DROPDOWN ---
-// GET /api/events/hosts/list - Fetch users to assign as event hosts
 router.get("/hosts/list", async (req, res, next) => {
   try {
     const dbQuery = () =>
@@ -26,13 +25,108 @@ router.get("/hosts/list", async (req, res, next) => {
   }
 });
 
+// --- TICKET SCANNING ROUTE (Must be before /:id) ---
+// POST /api/events/tickets/scan
+router.post("/tickets/scan", verifyAuth, async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { ticketCode, eventId } = req.body;
+
+    if (!ticketCode || !eventId) {
+      return res
+        .status(400)
+        .json({ message: "Ticket code and Event ID required." });
+    }
+
+    // Find the order by the unique ticket code encoded in the QR
+    const order = await prisma.order.findUnique({
+      where: { ticketCode: ticketCode },
+      include: { event: true, user: { select: { name: true } } },
+    });
+
+    if (!order) {
+      return res
+        .status(404)
+        .json({
+          isValid: false,
+          message: "Билет не найден (Ticket not found).",
+        });
+    }
+
+    if (order.eventId !== eventId) {
+      return res
+        .status(400)
+        .json({
+          isValid: false,
+          message: "Билет от другого мероприятия (Wrong event).",
+        });
+    }
+
+    if (order.event.hostId !== hostId) {
+      return res
+        .status(403)
+        .json({
+          isValid: false,
+          message: "Вы не являетесь организатором (Unauthorized).",
+        });
+    }
+
+    if (order.status !== "PAYMENT_SUCCESS" && order.status !== "ACTIVE") {
+      return res
+        .status(400)
+        .json({
+          isValid: false,
+          message: "Билет не оплачен (Ticket not paid).",
+        });
+    }
+
+    if (order.isUsed) {
+      return res.status(400).json({
+        isValid: false,
+        message: `Билет уже был использован (Already used at ${order.enteredAt?.toLocaleTimeString()}).`,
+      });
+    }
+
+    // Auto-Expiration Check
+    const now = new Date();
+    const eventEndDate = new Date(order.event.date);
+    eventEndDate.setHours(eventEndDate.getHours() + 24);
+
+    if (now > eventEndDate) {
+      return res
+        .status(400)
+        .json({
+          isValid: false,
+          message: "Срок действия билета истек (Event expired).",
+        });
+    }
+
+    // Mark Ticket as Used
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        isUsed: true,
+        enteredAt: new Date(),
+      },
+    });
+
+    res.status(200).json({
+      isValid: true,
+      message: "Билет действителен! Вход разрешен.",
+      attendeeName: order.user.name,
+      ticketCount: order.ticketCount,
+    });
+  } catch (error) {
+    console.error("Scan Ticket Error:", error);
+    res.status(500).json({ message: "Internal server error during scanning." });
+  }
+});
+
 // --- PERFOMER SECURE ROUTE ---
-// GET /api/events/hosted - Fetch events created by the logged-in performer
 router.get("/hosted", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // IMPORTANT: Never cache this globally, it's specific to the logged-in user.
     const events = await prisma.event.findMany({
       where: { hostId: userId },
       orderBy: { date: "desc" },
@@ -46,7 +140,6 @@ router.get("/hosted", verifyAuth, async (req, res) => {
 });
 
 // --- PUBLIC ROUTES ---
-// GET all events
 router.get("/", async (req, res, next) => {
   try {
     const dbQuery = () =>
@@ -67,11 +160,10 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-// GET single event by ID
 router.get("/:id", async (req, res, next) => {
   try {
     const eventId = req.params.id;
-    if (eventId === "hosted") return next(); // Prevent clash with /hosted route
+    if (eventId === "hosted" || eventId === "tickets") return next();
 
     const dbQuery = () =>
       prisma.event.findUnique({
@@ -92,8 +184,56 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
+// --- EVENT HOST ROUTES ---
+// GET /api/events/:id/attendees
+router.get("/:id/attendees", verifyAuth, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const hostId = req.user.id;
+
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+
+    if (!event) return res.status(404).json({ message: "Event not found." });
+    if (event.hostId !== hostId)
+      return res.status(403).json({ message: "Access denied." });
+
+    const attendees = await prisma.order.findMany({
+      where: {
+        eventId: eventId,
+        status: { in: ["PAYMENT_SUCCESS", "ACTIVE"] },
+      },
+      include: {
+        user: { select: { name: true, email: true, profile_picture: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const totalSold = attendees.reduce(
+      (sum, order) => sum + order.ticketCount,
+      0,
+    );
+    const revenue = attendees.reduce((sum, order) => sum + order.totalPrice, 0);
+    const checkedIn = attendees.filter((order) => order.isUsed).length;
+
+    res.status(200).json({
+      stats: { totalSold, revenue, checkedIn, capacity: event.totalTickets },
+      attendees: attendees.map((a) => ({
+        orderId: a.id,
+        name: a.user.name,
+        email: a.user.email,
+        ticketCount: a.ticketCount,
+        isUsed: a.isUsed,
+        enteredAt: a.enteredAt,
+        purchaseDate: a.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Get Attendees Error:", error);
+    res.status(500).json({ message: "Failed to load attendees." });
+  }
+});
+
 // --- SECURE CRUD ROUTES ---
-// POST new event (Secured with requireAuth to prevent assigning to others)
 router.post("/", verifyAuth, async (req, res, next) => {
   try {
     const {
@@ -109,14 +249,12 @@ router.post("/", verifyAuth, async (req, res, next) => {
       totalTickets,
       availableTickets,
       status,
-      // hostId // Ignore any hostId sent from the frontend client
     } = req.body;
 
-    // Use the verified user ID from the auth token
     const verifiedHostId =
       req.user.role === "admin" && req.body.hostId
-        ? req.body.hostId // Admin can assign to anyone
-        : req.user.id; // Performer can only assign to themselves
+        ? req.body.hostId
+        : req.user.id;
 
     const newEvent = await prisma.event.create({
       data: {
@@ -137,7 +275,8 @@ router.post("/", verifyAuth, async (req, res, next) => {
       include: { host: { select: { id: true, name: true } } },
     });
 
-    await invalidateKeys(["events:all"]);
+    if (typeof invalidateKeys === "function")
+      await invalidateKeys(["events:all"]);
     res.status(201).json(newEvent);
   } catch (error) {
     console.error("Failed to create event:", error);
@@ -145,12 +284,10 @@ router.post("/", verifyAuth, async (req, res, next) => {
   }
 });
 
-// PUT update event (Secured)
 router.put("/:id", verifyAuth, async (req, res, next) => {
   try {
     const eventId = req.params.id;
 
-    // Authorization Check: Only Admin or the Event Host can edit this event
     const existingEvent = await prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -197,7 +334,8 @@ router.put("/:id", verifyAuth, async (req, res, next) => {
       include: { host: { select: { id: true, name: true } } },
     });
 
-    await invalidateKeys(["events:all", `events:${eventId}`]);
+    if (typeof invalidateKeys === "function")
+      await invalidateKeys(["events:all", `events:${eventId}`]);
     res.json(updatedEvent);
   } catch (error) {
     console.error("Failed to update event:", error);
@@ -205,12 +343,10 @@ router.put("/:id", verifyAuth, async (req, res, next) => {
   }
 });
 
-// DELETE event (Secured)
 router.delete("/:id", verifyAuth, async (req, res, next) => {
   try {
     const eventId = req.params.id;
 
-    // Authorization Check
     const existingEvent = await prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -227,7 +363,8 @@ router.delete("/:id", verifyAuth, async (req, res, next) => {
       where: { id: eventId },
     });
 
-    await invalidateKeys(["events:all", `events:${eventId}`]);
+    if (typeof invalidateKeys === "function")
+      await invalidateKeys(["events:all", `events:${eventId}`]);
     res.json({ message: "Event deleted successfully" });
   } catch (error) {
     res.status(400).json({ message: "Failed to delete event" });
@@ -261,15 +398,24 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
       if (targetEvent.hostId === userId)
         throw new Error("You cannot purchase tickets for your own event");
 
+      // Auto-Expiration Check dynamically
+      const now = new Date();
+      const eventDate = new Date(targetEvent.date);
+      if (now > eventDate) {
+        await tx.event.update({
+          where: { id: targetEvent.id },
+          data: { status: "expired" },
+        });
+        throw new Error("This event has already ended.");
+      }
+
       const totalPrice = targetEvent.price * ticketCount;
 
-      // 1. Decrement inventory
       await tx.event.update({
         where: { id: eventId },
         data: { availableTickets: { decrement: ticketCount } },
       });
 
-      // 2. Create Pending Order
       const newOrder = await tx.order.create({
         data: {
           eventId: eventId,
@@ -280,7 +426,6 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
         },
       });
 
-      // 3. Create Universal Payment Record with Metadata
       const newPayment = await tx.payment.create({
         data: {
           userId: userId,
@@ -308,7 +453,6 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
 
       const tinkoffTxId = String(paymentData.paymentId);
 
-      // Save Tinkoff's ID to both the Order and the Universal Payment table
       await prisma.$transaction([
         prisma.order.update({
           where: { id: order.id },
@@ -320,7 +464,6 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
         }),
       ]);
 
-      // INVALIDATE CACHE
       if (typeof invalidateKeys === "function") {
         await invalidateKeys([
           "events:all",
@@ -335,7 +478,6 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
         paymentUrl: paymentData.paymentUrl,
       });
     } catch (tinkoffError) {
-      //  Restore tickets and fail both records
       await prisma.$transaction([
         prisma.event.update({
           where: { id: event.id },
@@ -359,6 +501,7 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
       "Not enough tickets available",
       "Event is not active",
       "You cannot purchase tickets for your own event",
+      "This event has already ended.",
     ];
 
     if (clientErrors.includes(error.message))

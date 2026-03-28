@@ -1,10 +1,12 @@
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 
 /**
  * Generates a PDF ticket in memory and returns it as a Buffer.
  */
 export const generateTicketPDF = (order, event, user) => {
-  return new Promise((resolve, reject) => {
+  // Added 'async' to the Promise callback to handle the QR generation
+  return new Promise(async (resolve, reject) => {
     try {
       // Create a document
       const doc = new PDFDocument({ size: "A4", margin: 50 });
@@ -42,17 +44,32 @@ export const generateTicketPDF = (order, event, user) => {
       doc.text(`Location: ${event.city}, ${event.address || "TBA"}`);
       doc.moveDown();
 
-      // Order Info
-      doc.rect(50, doc.y, 495, 100).stroke("#E5E7EB"); // Draw a box around order details
-      doc.moveDown(0.5);
+      // Order Info Box Coordinates
+      const boxY = doc.y;
+      doc.rect(50, boxY, 495, 120).stroke("#E5E7EB"); // Increased height slightly to fit QR nicely
+      doc.moveDown(1);
 
+      // Text inside the box (Left Side)
       doc.fontSize(12).fillColor("#000000");
       doc.text(`Order ID: ${order.id}`, 65);
       doc.text(`Ticket Holder: ${user.name}`, 65);
       doc.text(`Number of Tickets: ${order.ticketCount}`, 65);
       doc.text(`Total Price: ${order.totalPrice} RUB`, 65);
+      doc.text(`Ticket Code: ${order.ticketCode.split("-")[0]}...`, 65); // Short visual hash
 
-      doc.moveDown(3);
+      // --- 🚀 NEW: GENERATE & EMBED QR CODE ---
+      // We generate the QR code as a raw PNG buffer
+      const qrBuffer = await QRCode.toBuffer(order.ticketCode, {
+        errorCorrectionLevel: "H", // High error correction so it scans easily even if printed poorly
+        margin: 1,
+        width: 100, // 100x100 pixels
+      });
+
+      // Place the QR code on the right side of the box
+      doc.image(qrBuffer, 430, boxY + 10, { width: 100 });
+
+      // Move cursor below the box
+      doc.y = boxY + 135;
 
       // Footer
       doc

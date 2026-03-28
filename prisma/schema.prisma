@@ -65,13 +65,10 @@ enum OrderStatus {
 // ==========================================
 
 model User {
-  id    String @id @default(cuid())
-  email String @unique
-
-  // Password must be optional for OAuth (Google/Yandex) to work
+  id       String  @id @default(cuid())
+  email    String  @unique
   password String?
 
-  // Tracks how the user registered (credentials, google, yandex)
   auth_provider               String            @default("credentials")
   name                        String?
   phone                       String?
@@ -108,7 +105,6 @@ model User {
   resetPasswordExpires        DateTime?
   favorite_performers         Json?
 
-  // --- Relations ---
   partner_profile Partner?
 
   reviews_written       Review[]      @relation("CustomerReviews")
@@ -134,23 +130,19 @@ model User {
   subscription           UserSubscription?
   payments               Payment[]
 
-  // NextAuth Relations
   accounts           Account[]
   sessions           Session[]
   verificationTokens VerificationToken[]
 
-  // Agency Relations
   parentAgencyId String?
   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
   subProfiles    User[]  @relation("AgencySpecialists")
 
-  // Content Relations
   events          Event[]
   orders          Order[]
   articleComments ArticleComment[]
   articleLikes    ArticleLike[]
 
-  // Wallet Fields
   walletBalance      Float               @default(0)
   walletTransactions WalletTransaction[]
 }
@@ -226,11 +218,11 @@ model Review {
   performer_id     String
   customer_id      String
   customer_name    String
-  author_id        String // Stored as a string intentionally for manual frontend fetches
+  author_id        String
   rating           Int
   comment          String?   @db.Text
-  reply            String?   @db.Text // The reply from the person who received the review
-  reply_created_at DateTime? // Timestamp for the reply
+  reply            String?   @db.Text
+  reply_created_at DateTime?
   created_at       DateTime  @default(now())
   updated_at       DateTime  @default(now()) @updatedAt
 
@@ -354,7 +346,6 @@ model Message {
   chatId String
   chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
-  // FIX: Make sender optional. If the user deletes their account, SetNull keeps the chat history intact!
   senderId String?
   sender   User?   @relation(fields: [senderId], references: [id], onDelete: SetNull)
 }
@@ -505,8 +496,12 @@ model Order {
   status        OrderStatus @default(INITIATED)
   paymentId     String?
   paymentMethod String      @default("card")
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  ticketCode    String      @unique @default(uuid()) // The unique string embedded in the QR Code
+  isUsed        Boolean     @default(false) // Has the attendee scanned into the event?
+  enteredAt     DateTime? // The exact timestamp they entered
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Article {

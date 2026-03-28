@@ -1,5 +1,6 @@
 import prisma from "../libs/prisma.js";
 import { initTinkoffSubscriptionPayment } from "../utils/tinkoff.js";
+import "dotenv/config";
 
 //  GET ALL PLANS ---
 export const getPlans = async (req, res) => {
@@ -129,7 +130,7 @@ export const initiateCheckout = async (req, res) => {
 
 export const getRequestPrice = async (req, res) => {
   try {
-    const FIXED_REQUEST_PRICE = 490;
+    const FIXED_REQUEST_PRICE = process.env.REQUEST_PRICE || 490;
 
     res.status(200).json({ price: FIXED_REQUEST_PRICE });
   } catch (error) {

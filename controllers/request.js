@@ -1,9 +1,11 @@
 import prisma from "../libs/prisma.js";
 import { sendNotification } from "../services/socket.js";
 import { initTinkoffRequestPayment } from "../utils/tinkoff.js";
+import "dotenv/config";
 
 // Fixed price for publishing a request (in RUB)
-const REQUEST_PRICE = 500;
+
+const REQUEST_PRICE = process.env.REQUEST_PRICE || 490;
 
 // ==========================================
 // HELPER: Targeted Notifications
