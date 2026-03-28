@@ -50,6 +50,16 @@ enum WalletType {
   PAYOUT
 }
 
+enum OrderStatus {
+  INITIATED
+  PAYMENT_PENDING
+  PAYMENT_FAILED
+  PAYMENT_SUCCESS
+  CANCELLED
+  ACTIVE
+  EXPIRED
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -485,21 +495,18 @@ model Event {
 }
 
 model Order {
-  id      String @id @default(cuid())
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id            String      @id @default(cuid())
+  eventId       String
+  event         Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   ticketCount   Int
   totalPrice    Float
-  status        String  @default("pending")
+  status        OrderStatus @default(INITIATED)
   paymentId     String?
-  paymentMethod String  @default("card")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  paymentMethod String      @default("card")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 }
 
 model Article {

@@ -732,4 +732,81 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
+// ==========================================
+// RESEND VERIFICATION EMAIL
+// ==========================================
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res
+        .status(400)
+        .json({ message: "Email обязателен для заполнения." });
+    }
+
+    // 1. Find the user
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+
+    // Security practice: Don't explicitly reveal if an email is registered or not
+    // to prevent email enumeration attacks. Just return a success message.
+    if (!user) {
+      return res.status(200).json({
+        message:
+          "Если этот email зарегистрирован, мы отправили на него новую ссылку.",
+      });
+    }
+
+    // 2. Check if already verified
+    if (user.emailVerified || user.status === "active") {
+      return res
+        .status(400)
+        .json({
+          message: "Этот аккаунт уже подтвержден. Вы можете войти в систему.",
+        });
+    }
+
+    // 3. Delete any existing, expired tokens for this user
+    await prisma.verificationToken.deleteMany({
+      where: { identifier: user.email },
+    });
+
+    // 4. Generate a new token
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000); // 2 days from now
+
+    // 5. Save the new token
+    // (We use create instead of the nested User.update to keep it clean)
+    await prisma.verificationToken.create({
+      data: {
+        identifier: user.email,
+        token: rawToken,
+        expires: expiresAt,
+        userId: user.id, // Linking it to the specific user
+      },
+    });
+
+    // 6. Send the email
+    try {
+      await sendVerificationEmail(user.email, user.name, rawToken);
+      console.log(`[Success] Resent verification email to ${user.email}`);
+    } catch (emailError) {
+      console.error("Failed to resend verification email:", emailError.message);
+      return res
+        .status(500)
+        .json({ message: "Ошибка отправки письма. Попробуйте позже." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Новая ссылка успешно отправлена на ваш email.",
+    });
+  } catch (error) {
+    console.error("Resend Verification Error:", error);
+    return res.status(500).json({ message: "Внутренняя ошибка сервера" });
+  }
+});
+
 export default router;

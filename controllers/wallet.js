@@ -24,7 +24,7 @@ export const topUpWallet = async (req, res) => {
         provider: "tinkoff",
         status: "PENDING",
         metadata: {
-          type: "WALLET_TOPUP", // 🚨 Crucial for the webhook logic
+          type: "WALLET_TOPUP", // Crucial for the webhook
         },
       },
     });
@@ -42,8 +42,7 @@ export const topUpWallet = async (req, res) => {
         where: { id: payment.id },
         data: { providerTxId: String(tinkoffData.paymentId) },
       });
-      console.log(`first`);
-      console.log(tinkoffData.paymentUrl);
+
       // 5. Send URL to frontend
       return res.status(200).json({
         success: true,

@@ -2,7 +2,7 @@ import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { fetchCached, invalidateKeys } from "../middleware/redis.js";
 import { generateCustomOrderId } from "../utils/helper.js";
-import { initTinkoffPayment } from "../utils/tinkoff.js";
+import { initTinkoffEventTicketPayment } from "../utils/tinkoff.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import "dotenv/config";
 
@@ -234,14 +234,10 @@ router.delete("/:id", verifyAuth, async (req, res, next) => {
   }
 });
 
-// --- TICKETING AND PAYMENTS ---
-// Purchase event
-router.post("/:id/purchase", verifyAuth, async (req, res, next) => {
+router.post("/:id/purchase", verifyAuth, async (req, res) => {
   try {
     const eventId = req.params.id;
     const ticketCount = parseInt(req.body.ticketCount);
-
-    // SECURITY: Use the verified token ID, not req.body.userId to prevent spoofing
     const userId = req.user.id;
 
     if (!ticketCount || ticketCount <= 0) {
@@ -251,79 +247,126 @@ router.post("/:id/purchase", verifyAuth, async (req, res, next) => {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const newOrderId = generateCustomOrderId();
-
-    // --- SECURE TRANSACTION ---
-    const transactionResult = await prisma.$transaction(async (tx) => {
-      const event = await tx.event.findUnique({
+    // --- SECURE TRANSACTION: INVENTORY & PAYMENT RESERVATION ---
+    const { order, event, payment } = await prisma.$transaction(async (tx) => {
+      const targetEvent = await tx.event.findUnique({
         where: { id: eventId },
       });
 
-      if (!event) throw new Error("Event not found");
-      if (event.status !== "active") throw new Error("Event is not active");
-      if (event.availableTickets < ticketCount)
+      if (!targetEvent) throw new Error("Event not found");
+      if (targetEvent.status !== "active")
+        throw new Error("Event is not active");
+      if (targetEvent.availableTickets < ticketCount)
         throw new Error("Not enough tickets available");
-
-      // NEW SECURITY: Prevent performers from buying their own tickets to inflate sales
-      if (event.hostId === userId) {
+      if (targetEvent.hostId === userId)
         throw new Error("You cannot purchase tickets for your own event");
-      }
 
-      const totalPrice = event.price * ticketCount;
+      const totalPrice = targetEvent.price * ticketCount;
 
-      // Decrement inventory
+      // 1. Decrement inventory
       await tx.event.update({
         where: { id: eventId },
         data: { availableTickets: { decrement: ticketCount } },
       });
 
-      // Create Pending Order
-      const order = await tx.order.create({
+      // 2. Create Pending Order
+      const newOrder = await tx.order.create({
         data: {
-          id: newOrderId,
           eventId: eventId,
           userId: userId,
           ticketCount: ticketCount,
           totalPrice: totalPrice,
-          status: "pending",
+          status: "INITIATED",
         },
       });
 
-      return { order, event };
+      // 3. Create Universal Payment Record with Metadata
+      const newPayment = await tx.payment.create({
+        data: {
+          userId: userId,
+          amount: totalPrice,
+          provider: "tinkoff",
+          status: "PENDING",
+          metadata: {
+            type: "EVENT_TICKET",
+            orderId: newOrder.id,
+            eventId: eventId,
+          },
+        },
+      });
+
+      return { order: newOrder, event: targetEvent, payment: newPayment };
     });
 
-    const { order, event } = transactionResult;
+    // --- EXTERNAL API CALL: TINKOFF ---
+    try {
+      const paymentData = await initTinkoffEventTicketPayment(
+        order,
+        event,
+        user.email,
+      );
 
-    // Initialize Tinkoff Payment
-    const paymentData = await initTinkoffPayment(order, event, user.email);
+      const tinkoffTxId = String(paymentData.paymentId);
 
-    // Save the Tinkoff PaymentId for webhook mapping or refunds
-    await prisma.order.update({
-      where: { id: order.id },
-      data: { paymentId: paymentData.paymentId },
-    });
+      // Save Tinkoff's ID to both the Order and the Universal Payment table
+      await prisma.$transaction([
+        prisma.order.update({
+          where: { id: order.id },
+          data: { paymentId: tinkoffTxId },
+        }),
+        prisma.payment.update({
+          where: { id: payment.id },
+          data: { providerTxId: tinkoffTxId },
+        }),
+      ]);
 
-    // INVALIDATE CACHE
-    await invalidateKeys([
-      "events:all",
-      `events:${eventId}`,
-      "orders:all",
-      "orders:my",
-    ]);
+      // INVALIDATE CACHE
+      if (typeof invalidateKeys === "function") {
+        await invalidateKeys([
+          "events:all",
+          `events:${eventId}`,
+          "orders:all",
+          "orders:my",
+        ]);
+      }
 
-    res.status(200).json({
-      message: "Order initiated",
-      paymentUrl: paymentData.paymentUrl,
-    });
+      return res.status(200).json({
+        message: "Order initiated",
+        paymentUrl: paymentData.paymentUrl,
+      });
+    } catch (tinkoffError) {
+      //  Restore tickets and fail both records
+      await prisma.$transaction([
+        prisma.event.update({
+          where: { id: event.id },
+          data: { availableTickets: { increment: ticketCount } },
+        }),
+        prisma.order.update({
+          where: { id: order.id },
+          data: { status: "PAYMENT_FAILED" },
+        }),
+        prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        }),
+      ]);
+      console.error("Tinkoff Init Error:", tinkoffError);
+      throw new Error("TINKOFF_INIT_FAILED");
+    }
   } catch (error) {
     console.error("Purchase failed:", error.message);
-    if (
-      error.message === "Not enough tickets available" ||
-      error.message === "Event is not active" ||
-      error.message === "You cannot purchase tickets for your own event"
-    ) {
+    const clientErrors = [
+      "Not enough tickets available",
+      "Event is not active",
+      "You cannot purchase tickets for your own event",
+    ];
+
+    if (clientErrors.includes(error.message))
       return res.status(400).json({ message: error.message });
-    }
+    if (error.message === "TINKOFF_INIT_FAILED")
+      return res
+        .status(502)
+        .json({ message: "Payment gateway unavailable. Try again later." });
 
     res.status(500).json({ message: "Internal server error during purchase" });
   }

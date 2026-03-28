@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { fetchCached, prisma } from "../middleware/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
+import { getCurrentSubscription } from "../controllers/payment.js";
 
 const router = Router();
 
@@ -284,59 +285,6 @@ router.get("/performers", async (req, res) => {
   }
 });
 
-router.get("/me/subscription", verifyAuth, async (req, res) => {
-  try {
-    // 1. Get User ID from the authenticated request (set by verifyAuth middleware)
-    const userId = req.user.id;
-
-    // 2. Fetch Subscription with Plan details
-    const subscription = await prisma.userSubscription.findUnique({
-      where: { userId },
-      include: {
-        plan: {
-          select: {
-            id: true,
-            name: true,
-            priceMonthly: true, // Use as fallback for price
-          },
-        },
-      },
-    });
-
-    // 3. Handle No Subscription
-    if (!subscription) {
-      return res.status(404).json({ message: "No active subscription found" });
-    }
-
-    // 4. Determine Status Logic
-    // Prisma stores boolean 'isActive', but frontend expects specific string status
-    let status = "ACTIVE";
-    const now = new Date();
-
-    if (!subscription.isActive) {
-      status = "CANCELLED";
-    } else if (subscription.endDate && new Date(subscription.endDate) < now) {
-      status = "EXPIRED";
-    }
-
-    // 5. Map to Frontend Interface
-    const responseData = {
-      id: subscription.id,
-      planId: subscription.plan.id,
-      planName: subscription.plan.name,
-      status: status,
-      startDate: subscription.startDate,
-      endDate: subscription.endDate,
-      // You might want to fetch the actual last Payment amount here,
-      // but plan price is a good default
-      pricePaid: subscription.plan.priceMonthly,
-    };
-
-    res.json(responseData);
-  } catch (error) {
-    console.error("Get Current Subscription Error:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+router.get("/me/subscription", verifyAuth, getCurrentSubscription);
 
 export default router;

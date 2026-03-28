@@ -4,8 +4,8 @@ import "dotenv/config";
 const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8080";
 const TINKOFF_TERMINAL_KEY = process.env.TINKOFF_TERMINAL_KEY;
 const TINKOFF_PASSWORD = process.env.TINKOFF_PASSWORD;
-// const TINKOFF_API_URL = "https://securepay.tinkoff.ru/v2";
-const TINKOFF_API_URL = "https://rest-api-test.tinkoff.ru/v2";
+const TINKOFF_API_URL = "https://securepay.tinkoff.ru/v2";
+// const TINKOFF_API_URL = "https://rest-api-test.tinkoff.ru/v2";
 const APP_URL = process.env.WEB_APP_URL || "http://localhost:3000";
 
 /**
@@ -40,13 +40,17 @@ export const generateTinkoffToken = (data) => {
 /**
  * Initializes a payment session with Tinkoff
  */
-export const initTinkoffPayment = async (order, event, userEmail) => {
+export const initTinkoffEventTicketPayment = async (
+  order,
+  event,
+  userEmail,
+) => {
   const payload = {
     TerminalKey: TINKOFF_TERMINAL_KEY,
-    Amount: Math.round(order.totalPrice * 100), // Tinkoff expects amount in kopecks (cents)
+    Amount: Math.round(order.totalPrice * 100),
     OrderId: order.id,
     Description: `Билеты на: ${event.title}`,
-    NotificationURL: `${process.env.API_URL}/api/payments/tinkoff-webhook`,
+    NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff-event-ticket`,
     SuccessURL: `${APP_URL}/tickets?payment=success`,
     FailURL: `${APP_URL}/events/${event.id}?payment=failed`,
     DATA: {
@@ -145,6 +149,53 @@ export const initTinkoffTopUpPayment = async (paymentId, amount, userEmail) => {
   if (!result.Success) {
     throw new Error(
       result.Message || "Failed to initialize Tinkoff top-up payment",
+    );
+  }
+
+  return {
+    paymentUrl: result.PaymentURL,
+    paymentId: result.PaymentId,
+  };
+};
+
+/**
+ * Initializes a payment session with Tinkoff specifically for Subscriptions
+ */
+export const initTinkoffSubscriptionPayment = async (
+  paymentId,
+  amount,
+  planName,
+  interval,
+  userEmail,
+) => {
+  const intervalNames = { month: "1 мес.", half_year: "6 мес.", year: "1 год" };
+  const periodLabel = intervalNames[interval] || "период";
+
+  const payload = {
+    TerminalKey: TINKOFF_TERMINAL_KEY,
+    Amount: Math.round(amount * 100),
+    OrderId: paymentId,
+    Description: `Подписка на тариф «${planName}» (${periodLabel})`,
+    NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
+    SuccessURL: `${APP_URL}/pricing?status=success`,
+    FailURL: `${APP_URL}/pricing?status=error`,
+    DATA: {
+      Email: userEmail,
+    },
+  };
+
+  payload.Token = generateTinkoffToken(payload);
+  const response = await fetch(`${TINKOFF_API_URL}/Init`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const result = await response.json();
+
+  if (!result.Success) {
+    throw new Error(
+      result.Message || "Failed to initialize Tinkoff subscription payment",
     );
   }
 
