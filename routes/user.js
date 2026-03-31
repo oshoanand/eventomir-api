@@ -342,7 +342,7 @@ router.get("/me", verifyAuth, async (req, res) => {
         role: true,
         walletBalance: true,
         profile_picture: true,
-        createdAt: true,
+        created_at: true,
       },
     });
 
