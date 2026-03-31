@@ -2,7 +2,7 @@ import prisma from "../libs/prisma.js";
 import { initTinkoffSubscriptionPayment } from "../utils/tinkoff.js";
 import "dotenv/config";
 
-//  GET ALL PLANS ---
+// --- GET ALL PLANS ---
 export const getPlans = async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
@@ -16,31 +16,31 @@ export const getPlans = async (req, res) => {
   }
 };
 
-// GET CURRENT SUBSCRIPTION ---
+// --- GET CURRENT SUBSCRIPTION ---
 export const getCurrentSubscription = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const sub = await prisma.userSubscription.findFirst({
-      where: {
-        userId: userId,
-        status: "ACTIVE",
-        endDate: { gt: new Date() }, // Ensure it hasn't expired
-      },
+    // 🚨 FIX: UserSubscription schema has userId as @unique, and uses `isActive` boolean
+    const sub = await prisma.userSubscription.findUnique({
+      where: { userId: userId },
       include: { plan: true },
-      orderBy: { endDate: "desc" },
     });
 
     if (!sub) return res.status(200).json(null);
+
+    // Calculate dynamic status
+    const isExpired =
+      !sub.isActive || (sub.endDate && new Date(sub.endDate) < new Date());
 
     res.status(200).json({
       id: sub.id,
       planId: sub.planId,
       planName: sub.plan.name,
-      status: sub.status,
+      status: isExpired ? "EXPIRED" : "ACTIVE", // Mapped for frontend compatibility
       startDate: sub.startDate,
       endDate: sub.endDate,
-      pricePaid: sub.pricePaid,
+      pricePaid: 0, // Fallback as pricePaid is not in schema
     });
   } catch (error) {
     console.error("Get Subscription Error:", error);
@@ -48,12 +48,12 @@ export const getCurrentSubscription = async (req, res) => {
   }
 };
 
-//  INITIATE CHECKOUT ---
+// --- INITIATE CHECKOUT ---
 export const initiateCheckout = async (req, res) => {
   try {
     const userId = req.user.id;
     const userEmail = req.user.email;
-    const { planId, interval } = req.body;
+    const { planId, interval, paymentMethod } = req.body; // 🚨 Extracted paymentMethod
 
     if (!planId || !interval) {
       return res
@@ -78,6 +78,74 @@ export const initiateCheckout = async (req, res) => {
       return res.status(400).json({ message: "Invalid plan price." });
     }
 
+    // --- 🚀 NEW: WALLET PAYMENT LOGIC ---
+    if (paymentMethod === "wallet") {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+
+      if (user.walletBalance < price) {
+        return res
+          .status(400)
+          .json({ message: "Недостаточно средств на балансе кошелька." });
+      }
+
+      // Calculate new end date
+      const newEndDate = new Date();
+      if (interval === "month") newEndDate.setMonth(newEndDate.getMonth() + 1);
+      if (interval === "half_year")
+        newEndDate.setMonth(newEndDate.getMonth() + 6);
+      if (interval === "year")
+        newEndDate.setFullYear(newEndDate.getFullYear() + 1);
+
+      // Execute atomic transaction for wallet payment
+      await prisma.$transaction([
+        // 1. Deduct Balance
+        prisma.user.update({
+          where: { id: userId },
+          data: { walletBalance: { decrement: price } },
+        }),
+        // 2. Log Wallet Transaction
+        prisma.walletTransaction.create({
+          data: {
+            userId: userId,
+            amount: -price, // Negative because it's a payment
+            type: "PAYMENT",
+            description: `Оплата подписки: ${plan.name}`,
+          },
+        }),
+        // 3. Upsert User Subscription
+        prisma.userSubscription.upsert({
+          where: { userId: userId },
+          update: {
+            planId: plan.id,
+            startDate: new Date(),
+            endDate: newEndDate,
+            isActive: true,
+          },
+          create: {
+            userId: userId,
+            planId: plan.id,
+            startDate: new Date(),
+            endDate: newEndDate,
+            isActive: true,
+          },
+        }),
+        // 4. Log General Payment
+        prisma.payment.create({
+          data: {
+            userId: userId,
+            amount: price,
+            provider: "wallet",
+            status: "COMPLETED",
+            metadata: { type: "SUBSCRIPTION", planId: plan.id, interval },
+          },
+        }),
+      ]);
+
+      // Return null checkoutUrl since it's instantly completed
+      return res.status(200).json({ success: true, checkoutUrl: null });
+    }
+
+    // --- CARD PAYMENT LOGIC (TINKOFF) ---
     // 3. Create Pending Payment with Metadata for the Webhook
     const payment = await prisma.payment.create({
       data: {
@@ -86,7 +154,7 @@ export const initiateCheckout = async (req, res) => {
         provider: "tinkoff",
         status: "PENDING",
         metadata: {
-          type: "SUBSCRIPTION", // Crucial for Webhook routing
+          type: "SUBSCRIPTION",
           planId: plan.id,
           interval: interval,
         },

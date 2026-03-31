@@ -123,15 +123,26 @@ export const initTinkoffRequestPayment = async (
 /**
  * Initializes a payment session with Tinkoff specifically for Wallet Top-Ups
  */
-export const initTinkoffTopUpPayment = async (paymentId, amount, userEmail) => {
+export const initTinkoffTopUpPayment = async (
+  paymentId,
+  amount,
+  userEmail,
+  userType,
+) => {
   const payload = {
     TerminalKey: TINKOFF_TERMINAL_KEY,
     Amount: Math.round(amount * 100),
     OrderId: paymentId,
     Description: `Пополнение кошелька на ${amount} руб.`,
     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
-    SuccessURL: `${APP_URL}/customer-profile?topup=success`,
-    FailURL: `${APP_URL}/customer-profile?topup=failed`,
+    SuccessURL:
+      userType === "customer"
+        ? `${APP_URL}/customer-profile?topup=success`
+        : `${APP_URL}/performer-profile?topup=success`,
+    FailURL:
+      userType === "customer"
+        ? `${APP_URL}/customer-profile?topup=failed`
+        : `${APP_URL}/performer-profile?topup=failed`,
     DATA: {
       Email: userEmail,
     },
@@ -177,8 +188,8 @@ export const initTinkoffSubscriptionPayment = async (
     OrderId: paymentId,
     Description: `Подписка на тариф «${planName}» (${periodLabel})`,
     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
-    SuccessURL: `${APP_URL}/pricing?status=success`,
-    FailURL: `${APP_URL}/pricing?status=error`,
+    SuccessURL: `${APP_URL}/pricing?subscription=success`,
+    FailURL: `${APP_URL}/pricing?subscription=failed`,
     DATA: {
       Email: userEmail,
     },

@@ -6,6 +6,7 @@ export const topUpWallet = async (req, res) => {
     const userId = req.user.id;
     const userEmail = req.user.email;
     const { amount } = req.body;
+    const userType = req.params.user;
 
     // 1. Validation
     const numericAmount = Number(amount);
@@ -35,6 +36,7 @@ export const topUpWallet = async (req, res) => {
         payment.id,
         numericAmount,
         userEmail,
+        userType,
       );
 
       // 4. Save Tinkoff's internal TxID

@@ -5,6 +5,6 @@ import { topUpWallet } from "../controllers/wallet.js";
 const router = express.Router();
 
 // POST /api/wallet/topup
-router.post("/topup", verifyAuth, topUpWallet);
+router.post("/topup/:user", verifyAuth, topUpWallet);
 
 export default router;
