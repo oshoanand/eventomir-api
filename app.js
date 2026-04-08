@@ -1,12 +1,12 @@
 import express from "express";
 import http from "http";
-// import { Server } from "socket.io";
 import dotenv from "dotenv";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { initSocket } from "./services/socket.js";
+import { initializeMinio } from "./utils/minioClient.js";
 
 // Routes
 import authRoutes from "./routes/auth.js";
@@ -32,7 +32,6 @@ import walletRoutes from "./routes/wallet.js";
 import webhookRoutes from "./routes/webhooks.js";
 
 // Services
-//import setupTTL from "./utils/ttl-service.js";
 import { connectRedis } from "./middleware/redis.js";
 
 dotenv.config();
@@ -44,40 +43,17 @@ const __dirname = dirname(__filename);
 async function initializeExpressServer() {
   const app = express();
 
-  //  Create HTTP Server explicitly (Required for Socket.io)
+  // Create HTTP Server explicitly (Required for Socket.io)
   const server = http.createServer(app);
+
   // Initialize Socket.io
   initSocket(server);
 
-  // 5. Initialize Socket.io
-  // const io = new Server(server, {
-  //   cors: {
-  //     origin: allowedDomains, // Socket.io needs explicit origins
-  //     methods: ["GET", "POST"],
-  //     credentials: true,
-  //   },
-  // });
-
-  // 6. Make 'io' accessible in routes via req.app.get('socketio')
-  // app.set("socketio", io);
-
-  // Socket Connection Logic
-  // io.on("connection", (socket) => {
-  //   console.log(`🔌 Admin Connected: ${socket.id}`);
-  //   socket.on("disconnect", () => {
-  //     console.log(`❌ Admin Disconnected: ${socket.id}`);
-  //   });
-  // });
-
   // Express Middleware ---
-
   app.use(express.json());
 
-  // Serve Static Files
+  // Serve Static Files (Kept for legacy uploads, though new ones go to MinIO)
   app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-  // Initialize TTL Service
-  // setupTTL();
 
   // Logging Middleware
   app.use((req, res, next) => {
@@ -93,7 +69,6 @@ async function initializeExpressServer() {
     }),
   );
 
-  // Express CORS Setup (Using the shared allowedDomains)
   // Define Allowed Domains (Shared between Express and Socket.io)
   const allowedDomains = [
     process.env.PARTNER_APP_URL,
@@ -118,9 +93,16 @@ async function initializeExpressServer() {
     }),
   );
 
-  // Connect to Redis BEFORE mounting routes
+  // --- External Services Initialization ---
+
+  // 1. Connect to Redis BEFORE mounting routes
   await connectRedis();
 
+  // 2. Initialize MinIO Bucket & Policies
+  // 🚨 This will automatically create your bucket if it doesn't exist
+  await initializeMinio();
+
+  // --- Mount Routes ---
   app.use("/api/admin", adminRoutes);
   app.use("/api/articles", articleRoutes);
   app.use("/api/auth", authRoutes);
@@ -144,13 +126,12 @@ async function initializeExpressServer() {
   app.use("/api/webhooks", webhookRoutes);
 
   // --- Server Start ---
-
   const PORT = process.env.PORT || 8800;
 
-  // 7. LISTEN on 'server', NOT 'app'
+  // LISTEN on 'server', NOT 'app'
   server.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📡 Socket.io initialized for Admin Panel`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📡 Socket.io initialized`);
   });
 }
 

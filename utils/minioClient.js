@@ -5,15 +5,14 @@ import "dotenv/config";
 export const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || "localhost",
   port: parseInt(process.env.MINIO_PORT) || 9000,
-  useSSL: process.env.MINIO_USE_SSL === "false", // false for local dev
+  useSSL: process.env.MINIO_USE_SSL === "true", // false for local dev
   accessKey: process.env.MINIO_ACCESS_KEY || "minioadmin",
   secretKey: process.env.MINIO_SECRET_KEY || "minioadmin123",
 });
 
-export const MINIO_BUCKET_NAME =
-  process.env.MINIO_BUCKET_NAME || "eventomir-uploads";
+export const MINIO_BUCKET_NAME = process.env.MINIO_BUCKET_NAME || "eventomir";
 export const MINIO_PUBLIC_URL =
-  process.env.MINIO_PUBLIC_URL || "http://localhost:9000/eventomir-uploads";
+  process.env.MINIO_PUBLIC_URL || "http://localhost:9000/eventomir";
 
 // 2. Auto-Initialize Bucket & Public Policies
 export const initializeMinio = async () => {
@@ -53,10 +52,3 @@ export const initializeMinio = async () => {
     console.error("❌ MinIO Initialization Error:", error);
   }
 };
-
-// mkdir -p /opt/minio/data
-// cd /opt/minio
-// nano docker-compose.yml
-
-// MINIO_ROOT_USER=admin_eventomir
-// MINIO_ROOT_PASSWORD=Kochka@1982!!
