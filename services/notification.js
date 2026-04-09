@@ -9,18 +9,13 @@ import { sendNotification as sendSocketNotification } from "../libs/socket.js";
 export const getUserTopic = (phone) => {
   if (!phone) return null;
 
-  // Strip all non-numeric characters
   const digits = phone.replace(/\D/g, "");
-
-  // Standardize Russian/CIS numbers (remove leading 7 or 8 if length is 11)
   if (
     digits.length === 11 &&
     (digits.startsWith("7") || digits.startsWith("8"))
   ) {
     return `user_${digits.slice(1)}`;
   }
-
-  // Fallback for other international formats
   return `user_${digits}`;
 };
 
@@ -44,7 +39,7 @@ export const notifyUser = async ({
           title,
           message: body,
           type,
-          data: data || {}, // Fallback to empty object if undefined
+          data: data || {},
         },
       });
     }
@@ -52,10 +47,10 @@ export const notifyUser = async ({
     // 2. Emit Real-Time Socket Event (Instant delivery for active users)
     await sendSocketNotification(userId, type, body, { title, ...data });
 
-    // 3. Fetch User's Data (Need Phone for Topic, or Tokens for fallback)
+    // 🚨 FIX 2: Select 'fcmToken' (String) matching your schema
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { phone: true, fcmTokens: true },
+      select: { phone: true, fcmToken: true },
     });
 
     if (!user) return;
@@ -64,17 +59,16 @@ export const notifyUser = async ({
     const topicName = getUserTopic(user.phone);
 
     if (topicName) {
-      // 🚀 SCENARIO A: Topic-Based Delivery (Highly Scalable)
-      // Firebase will automatically route this to all devices subscribed to this topic
+      // 🚀 SCENARIO A: Topic-Based Delivery
       await sendPushNotification("topic", title, body, topicName, {
         url: data?.url || "/",
       });
 
       console.log(`✅ FCM Sent via Topic: ${topicName}`);
-    } else if (user.fcmTokens && user.fcmTokens.length > 0) {
+    } else if (user.fcmToken) {
       // 🔄 SCENARIO B: Fallback to Token-Based Delivery
-      // Used if the user hasn't provided a phone number yet
-      const tokens = user.fcmTokens.map((t) => t.token);
+      // Wrap the single string token in an array for Firebase
+      const tokens = [user.fcmToken];
 
       const fcmResponse = await sendPushNotification(
         "token",
@@ -84,24 +78,20 @@ export const notifyUser = async ({
         { url: data?.url || "/" },
       );
 
-      // Cleanup Dead Tokens
+      // Cleanup Dead Token
       if (fcmResponse && fcmResponse.responses) {
-        const deadTokens = [];
-        fcmResponse.responses.forEach((resp, idx) => {
-          if (
-            !resp.success &&
-            (resp.error.code === "messaging/invalid-registration-token" ||
-              resp.error.code === "messaging/registration-token-not-registered")
-          ) {
-            deadTokens.push(tokens[idx]);
-          }
-        });
-
-        if (deadTokens.length > 0) {
-          await prisma.fcmToken.deleteMany({
-            where: { token: { in: deadTokens } },
+        const resp = fcmResponse.responses[0];
+        if (
+          !resp.success &&
+          (resp.error.code === "messaging/invalid-registration-token" ||
+            resp.error.code === "messaging/registration-token-not-registered")
+        ) {
+          // Nullify the dead token so we don't try sending to it again
+          await prisma.user.update({
+            where: { id: userId },
+            data: { fcmToken: null },
           });
-          console.log(`🗑️ Cleaned up ${deadTokens.length} dead FCM tokens.`);
+          console.log(`🗑️ Cleaned up dead FCM token for user ${userId}.`);
         }
       }
     }

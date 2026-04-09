@@ -1,7 +1,7 @@
 import express from "express";
 import { admin } from "../libs/firebase.js";
 import prisma from "../libs/prisma.js";
-import { getUserTopic, notifyUser } from "../services/notification.js"; // 🚨 Added notifyUser
+import { getUserTopic, notifyUser } from "../services/notification.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import "dotenv/config";
 
@@ -21,18 +21,20 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // 2. Save Token in Database (Multi-Device Support)
-    await prisma.verificationToken.upsert({
-      where: { token: token },
-      update: { userId: user.id, updatedAt: new Date() },
-      create: { token: token, userId: user.id },
+    // Save Token in the User table directly
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { fcmToken: token },
     });
 
     // 3. Define and Execute Subscriptions
     const topicsToSubscribe = [];
+
+    // Personal Topic (user_9898989898)
     const personalTopic = getUserTopic(user.phone);
     if (personalTopic) topicsToSubscribe.push(personalTopic);
 
+    // Group Topics
     if (user.role === "customer") {
       topicsToSubscribe.push(
         process.env.CUSTOMER_FCM_TOPIC || "eventomir_customer_topic",
@@ -55,11 +57,8 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
 
     await Promise.allSettled(subscriptionPromises);
 
-    // =========================================================
-    // 🚨 4. THE MAGIC: TRIGGER WELCOME PUSH ON FIRST LOGIN
-    // =========================================================
+    // 4. TRIGGER WELCOME PUSH ON FIRST LOGIN
     if (!user.welcomePushSent) {
-      // Send the Push Notification
       await notifyUser({
         userId: user.id,
         title: "Добро пожаловать в Eventomir! 🎉",
@@ -88,14 +87,10 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. MANUAL SUBSCRIBE FALLBACK (Optional)
-// ==========================================
+// Manual Subscribe Fallback (Optional)
 router.post("/subscribe", verifyAuth, async (req, res) => {
   try {
     const { token } = req.body;
-
-    // Fetch user to ensure we have the most up-to-date phone number
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { phone: true },
@@ -104,7 +99,6 @@ router.post("/subscribe", verifyAuth, async (req, res) => {
     const topicName = getUserTopic(user?.phone);
 
     if (topicName && token) {
-      // Subscribes the device token to the generated topic
       await admin.messaging().subscribeToTopic(token, topicName);
       return res.status(200).send("Subscribed successfully");
     }
