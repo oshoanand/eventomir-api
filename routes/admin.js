@@ -606,7 +606,7 @@ router.post(
           body,
           targetType: type, // Prisma matches the string 'topic'/'token' to the Enum automatically
           target,
-          status: "SENT",
+          status: "SUCCESS",
           messageId: response,
         },
       });
