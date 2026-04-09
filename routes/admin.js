@@ -606,4 +606,19 @@ router.post(
   },
 );
 
+router.get("/history", async (req, res) => {
+  try {
+    const logs = await prisma.notificationLog.findMany({
+      take: 50,
+      orderBy: {
+        sentAt: "desc",
+      },
+    });
+    res.json(logs);
+  } catch (error) {
+    console.error("Prisma Error:", error);
+    res.status(500).json({ error: "Failed to fetch history" });
+  }
+});
+
 export default router;

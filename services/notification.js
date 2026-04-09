@@ -60,8 +60,25 @@ export const notifyUser = async ({
 
     if (topicName) {
       // 🚀 SCENARIO A: Topic-Based Delivery
-      await sendPushNotification("topic", title, body, topicName, {
-        url: data?.url || "/",
+      const response = await sendPushNotification(
+        "topic",
+        title,
+        body,
+        topicName,
+        {
+          url: data?.url || "/",
+        },
+      );
+
+      await prisma.notificationLog.create({
+        data: {
+          title,
+          body,
+          targetType: "topic",
+          target,
+          status: "SENT",
+          messageId: response,
+        },
       });
 
       console.log(`✅ FCM Sent via Topic: ${topicName}`);
@@ -77,6 +94,17 @@ export const notifyUser = async ({
         tokens,
         { url: data?.url || "/" },
       );
+
+      await prisma.notificationLog.create({
+        data: {
+          title,
+          body,
+          targetType: "token",
+          target,
+          status: "SENT",
+          messageId: fcmResponse,
+        },
+      });
 
       // Cleanup Dead Token
       if (fcmResponse && fcmResponse.responses) {
@@ -97,5 +125,26 @@ export const notifyUser = async ({
     }
   } catch (error) {
     console.error("❌ Notification Dispatcher Error:", error);
+
+    // 3. ✅ Log Failure to PostgreSQL
+    // We wrap this in a try/catch so logging failure doesn't crash the response
+    try {
+      await prisma.notificationLog.create({
+        data: {
+          title,
+          body,
+          targetType: type,
+          target,
+          status: "FAILED",
+          errorDetails: error.message,
+        },
+      });
+    } catch (logError) {
+      console.error("Failed to write error log to DB:", logError);
+    }
+
+    return res
+      .status(500)
+      .json({ error: "Failed to send notification", details: error.message });
   }
 };

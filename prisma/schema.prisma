@@ -74,6 +74,16 @@ enum OrderStatus {
   EXPIRED
 }
 
+enum TargetType {
+  topic
+  token
+}
+
+enum FCMStatus {
+  SUCCESS
+  FAILED
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -627,4 +637,18 @@ model WalletTransaction {
   description String     @db.Text
 
   createdAt DateTime @default(now())
+}
+
+model NotificationLog {
+  id           String     @id @default(uuid())
+  title        String
+  body         String
+  targetType   TargetType
+  target       String
+  status       FCMStatus  @default(SUCCESS)
+  messageId    String?
+  sentAt       DateTime   @default(now())
+  errorDetails String?
+
+  @@index([sentAt])
 }
