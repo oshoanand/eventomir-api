@@ -8,7 +8,7 @@ import {
   sendVerificationEmail,
   sendResetPasswordLinkEmail,
 } from "../mailer/email-sender.js";
-import { invalidatePattern } from "../middleware/redis.js";
+import { invalidatePattern } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 
 const router = express.Router();

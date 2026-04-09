@@ -128,7 +128,7 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-import { fetchCached, invalidatePattern } from "../middleware/redis.js";
+import { fetchCached, invalidatePattern } from "../libs/redis.js";
 import { createUploader } from "../utils/multer.js";
 
 const router = Router();

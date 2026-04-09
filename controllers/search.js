@@ -230,7 +230,7 @@
 // };
 
 import prisma from "../libs/prisma.js";
-import { fetchCached } from "../middleware/redis.js";
+import { fetchCached } from "../libs/redis.js";
 
 export const searchPerformers = async (req, res) => {
   try {

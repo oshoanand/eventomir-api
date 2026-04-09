@@ -5,8 +5,11 @@ import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import { initSocket } from "./services/socket.js";
+
+// Services & Utils
+import { initSocket } from "./libs/socket.js";
 import { initializeMinio } from "./utils/minioClient.js";
+import { connectRedis } from "./libs/redis.js";
 
 // Routes
 import authRoutes from "./routes/auth.js";
@@ -30,9 +33,7 @@ import searchRoutes from "./routes/search.js";
 import reviewsRoutes from "./routes/reviews.js";
 import walletRoutes from "./routes/wallet.js";
 import webhookRoutes from "./routes/webhooks.js";
-
-// Services
-import { connectRedis } from "./middleware/redis.js";
+import fcmRoutes from "./routes/fcm.js";
 
 dotenv.config();
 
@@ -46,10 +47,17 @@ async function initializeExpressServer() {
   // Create HTTP Server explicitly (Required for Socket.io)
   const server = http.createServer(app);
 
-  // Initialize Socket.io
-  initSocket(server);
+  // 🚨 1. Define Allowed Domains FIRST (Shared between Express and Socket.io)
+  const allowedDomains = [
+    process.env.PARTNER_APP_URL,
+    process.env.WEB_APP_URL,
+    process.env.ADMIN_PANEL_URL,
+  ].filter(Boolean); // Removes undefined/null if env vars are missing
 
-  // Express Middleware ---
+  // 🚨 2. Initialize Socket.io securely by passing the allowed domains
+  initSocket(server, allowedDomains);
+
+  // --- Express Middleware ---
   app.use(express.json());
 
   // Serve Static Files (Kept for legacy uploads, though new ones go to MinIO)
@@ -69,22 +77,16 @@ async function initializeExpressServer() {
     }),
   );
 
-  // Define Allowed Domains (Shared between Express and Socket.io)
-  const allowedDomains = [
-    process.env.PARTNER_APP_URL,
-    process.env.WEB_APP_URL,
-    process.env.ADMIN_PANEL_URL,
-  ].filter(Boolean); // Removes undefined if env is missing
-
+  // 🚨 3. Express CORS Setup
   app.use(
     cors({
       origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
+        // Allow requests with no origin (like mobile apps, Postman, or curl requests)
         if (!origin) return callback(null, true);
 
         if (allowedDomains.indexOf(origin) === -1) {
-          const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-          console.log(msg);
+          const msg = `CORS Blocked: The origin ${origin} is not allowed to access this server.`;
+          console.warn(msg); // Use warn instead of log for security auditing
           return callback(new Error(msg), false);
         }
         return callback(null, true);
@@ -95,11 +97,11 @@ async function initializeExpressServer() {
 
   // --- External Services Initialization ---
 
-  // 1. Connect to Redis BEFORE mounting routes
+  // Connect to Redis BEFORE mounting routes
   await connectRedis();
 
-  // 2. Initialize MinIO Bucket & Policies
-  // 🚨 This will automatically create your bucket if it doesn't exist
+  // Initialize MinIO Bucket & Policies
+  // This will automatically create your bucket if it doesn't exist
   await initializeMinio();
 
   // --- Mount Routes ---
@@ -124,6 +126,7 @@ async function initializeExpressServer() {
   app.use("/api/reviews", reviewsRoutes);
   app.use("/api/wallet", walletRoutes);
   app.use("/api/webhooks", webhookRoutes);
+  app.use("/api/fcm", fcmRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;
@@ -131,12 +134,14 @@ async function initializeExpressServer() {
   // LISTEN on 'server', NOT 'app'
   server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📡 Socket.io initialized`);
+    console.log(`📡 Socket.io initialized and secured`);
   });
 }
 
 initializeExpressServer()
-  .then()
+  .then(() => {
+    console.log("✅ Initialization complete.");
+  })
   .catch((e) => {
     console.error("❌ Failed to start server:", e);
     process.exit(1);

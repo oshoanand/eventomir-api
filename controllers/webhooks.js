@@ -208,7 +208,7 @@
 import prisma from "../libs/prisma.js";
 import { generateTinkoffToken } from "../utils/tinkoff.js";
 import { notifyTargetedPerformers } from "./request.js";
-import { invalidateKeys } from "../middleware/redis.js";
+import { invalidateKeys } from "../libs/redis.js";
 
 // Import your mailer utilities (You will need to create the Subscription versions of these!)
 import {

@@ -1,10 +1,11 @@
 import prisma from "../libs/prisma.js";
-import { sendNotification } from "../services/socket.js";
 import { initTinkoffRequestPayment } from "../utils/tinkoff.js";
 import "dotenv/config";
 
-// Fixed price for publishing a request (in RUB)
+// 🚨 IMPORT THE NEW MASTER DISPATCHER
+import { notifyUser } from "../services/notification.js";
 
+// Fixed price for publishing a request (in RUB)
 const REQUEST_PRICE = process.env.REQUEST_PRICE || 490;
 
 // ==========================================
@@ -27,15 +28,23 @@ export const notifyTargetedPerformers = async (requestData, customerName) => {
 
     const msg = `Новый заказ в г. ${requestData.city}: ${requestData.category} (Бюджет: ${requestData.budget || "не указан"})`;
 
-    // Dispatch real-time socket/redis notifications asynchronously
+    // 🚨 Dispatch real-time socket, DB, and FCM push notifications asynchronously
     const promises = targetPerformers.map((performer) =>
-      sendNotification(performer.id, "SYSTEM", msg, {
-        requestId: requestData.id,
-        link: `/requests/${requestData.id}`,
+      notifyUser({
+        userId: performer.id,
+        title: "🔔 Новый заказ в вашем городе!",
+        body: msg,
+        type: "NEW_REQUEST",
+        data: {
+          requestId: requestData.id,
+          url: `/requests/${requestData.id}`, // Clicking the push notification opens this specific request
+        },
       }),
     );
 
+    // Run all notifications concurrently
     await Promise.all(promises);
+
     console.log(
       `✅ Notified ${targetPerformers.length} performers in ${requestData.city}`,
     );
@@ -120,8 +129,6 @@ export const createPaidRequest = async (req, res) => {
     // SCENARIO B: PAY WITH BANK GATEWAY (TINKOFF)
     // ----------------------------------------------------
     if (paymentMethod === "gateway") {
-      let paymentRecord;
-
       // 1. Create Pending Request & Payment in DB
       const newRequest = await prisma.paidRequest.create({
         data: {
@@ -134,7 +141,7 @@ export const createPaidRequest = async (req, res) => {
         },
       });
 
-      paymentRecord = await prisma.payment.create({
+      const paymentRecord = await prisma.payment.create({
         data: {
           userId: customerId,
           amount: REQUEST_PRICE,

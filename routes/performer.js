@@ -915,7 +915,7 @@ import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { createUploader } from "../utils/multer.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-import { invalidatePattern } from "../middleware/redis.js";
+import { invalidatePattern } from "../libs/redis.js";
 import { searchPerformers } from "../controllers/search.js";
 
 // --- MinIO Imports ---

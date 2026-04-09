@@ -1,10 +1,17 @@
 import prisma from "../libs/prisma.js";
-import { sendNotification } from "../services/socket.js";
 
-// --- Create Booking Request ---
+// 🚨 IMPORT THE MASTER DISPATCHER
+import { notifyUser } from "../services/notification.js";
+
+// ==========================================
+// 1. CREATE BOOKING REQUEST (Customer -> Performer)
+// ==========================================
 export const createBooking = async (req, res) => {
   try {
-    const { performerId, date, details, customerId } = req.body;
+    const { performerId, date, details } = req.body;
+
+    // SECURITY: Use the ID from the verified JWT token
+    const customerId = req.user?.id || req.body.customerId;
 
     // 1. Validation
     if (!performerId || !date || !customerId) {
@@ -14,14 +21,14 @@ export const createBooking = async (req, res) => {
     // 2. Check if performer exists
     const performer = await prisma.user.findUnique({
       where: { id: performerId },
-      select: { id: true, name: true, email: true }, // Select minimal fields
+      select: { id: true, name: true, email: true },
     });
 
     if (!performer) {
       return res.status(404).json({ message: "Performer not found" });
     }
 
-    // 3. Check for availability (Optional: prevent double booking)
+    // 3. Check for availability (Prevent double booking)
     const existingBooking = await prisma.booking.findFirst({
       where: {
         performerId,
@@ -36,55 +43,51 @@ export const createBooking = async (req, res) => {
         .json({ message: "Performer is not available on this date" });
     }
 
-    // 4. Create Booking & Persist Notification in Transaction
-    const result = await prisma.$transaction(async (prisma) => {
-      // A. Create Booking
-      const booking = await prisma.booking.create({
-        data: {
-          date: new Date(date),
-          details,
-          status: "PENDING",
-          customer: { connect: { id: customerId } },
-          performer: { connect: { id: performerId } },
-        },
-        include: {
-          customer: { select: { name: true } },
-        },
-      });
-
-      // B. Create DB Notification Record (Permanent History)
-      await prisma.notification.create({
-        data: {
-          userId: performerId,
-          type: "BOOKING_REQUEST",
-          message: `Новый запрос на бронирование от ${booking.customer.name}`,
-          data: { bookingId: booking.id },
-        },
-      });
-
-      return booking;
+    // 4. Create Booking
+    const booking = await prisma.booking.create({
+      data: {
+        date: new Date(date),
+        details,
+        status: "PENDING",
+        customer: { connect: { id: customerId } },
+        performer: { connect: { id: performerId } },
+      },
+      include: {
+        customer: { select: { name: true } },
+      },
     });
 
-    // 5. Send Real-time/Redis Stream Notification
-    await sendNotification(
-      performerId,
-      "BOOKING_REQUEST",
-      `Новый запрос на бронирование от ${result.customer.name}`,
-      { bookingId: result.id, date: result.date },
-    );
+    // ---------------------------------------------------------
+    // 5. NOTIFY PERFORMER (FCM Push + Socket + DB)
+    // ---------------------------------------------------------
+    await notifyUser({
+      userId: performerId,
+      title: "📅 Новый запрос на бронирование",
+      body: `Вы получили новый запрос на бронирование от ${booking.customer.name}`,
+      type: "BOOKING_REQUEST",
+      data: {
+        bookingId: booking.id,
+        date: booking.date,
+        url: "/performer-profile/bookings", // Deep link for Push Notification click
+      },
+    });
 
-    res.status(201).json(result);
+    res.status(201).json(booking);
   } catch (error) {
     console.error("Create Booking Error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// --- Accept Booking ---
+// ==========================================
+// 2. ACCEPT BOOKING (Performer -> Customer)
+// ==========================================
 export const acceptBooking = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { performerId } = req.body; // Passed from verifyAuth middleware usually, or body
+
+    // SECURITY: Ensure the person accepting is the actual performer
+    const performerId = req.user?.id || req.body.performerId;
 
     const booking = await prisma.booking.findUnique({
       where: { id: requestId },
@@ -103,26 +106,20 @@ export const acceptBooking = async (req, res) => {
       include: { performer: { select: { name: true } } },
     });
 
-    // Notify Customer
-    const message = `Исполнитель ${updatedBooking.performer.name} принял ваш заказ!`;
-
-    // Save to DB
-    await prisma.notification.create({
+    // ---------------------------------------------------------
+    // NOTIFY CUSTOMER (FCM Push + Socket + DB)
+    // ---------------------------------------------------------
+    await notifyUser({
+      userId: updatedBooking.customerId,
+      title: "Заказ принят! 🎉",
+      body: `Исполнитель ${updatedBooking.performer.name} принял ваш заказ!`,
+      type: "BOOKING_ACCEPTED",
       data: {
-        userId: updatedBooking.customerId,
-        type: "BOOKING_UPDATE",
-        message: message,
-        data: { bookingId: updatedBooking.id, status: "CONFIRMED" },
+        bookingId: updatedBooking.id,
+        status: "CONFIRMED",
+        url: "/customer-profile/bookings",
       },
     });
-
-    // Send Real-time
-    await sendNotification(
-      updatedBooking.customerId,
-      "BOOKING_ACCEPTED",
-      message,
-      { bookingId: updatedBooking.id },
-    );
 
     res.json(updatedBooking);
   } catch (error) {
@@ -131,11 +128,13 @@ export const acceptBooking = async (req, res) => {
   }
 };
 
-// --- Reject Booking ---
+// ==========================================
+// 3. REJECT BOOKING (Performer -> Customer)
+// ==========================================
 export const rejectBooking = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { performerId } = req.body;
+    const performerId = req.user?.id || req.body.performerId;
 
     const booking = await prisma.booking.findUnique({
       where: { id: requestId },
@@ -153,24 +152,20 @@ export const rejectBooking = async (req, res) => {
       include: { performer: { select: { name: true } } },
     });
 
-    // Notify Customer
-    const message = `Исполнитель ${updatedBooking.performer.name} отклонил ваш запрос.`;
-
-    await prisma.notification.create({
+    // ---------------------------------------------------------
+    // NOTIFY CUSTOMER (FCM Push + Socket + DB)
+    // ---------------------------------------------------------
+    await notifyUser({
+      userId: updatedBooking.customerId,
+      title: "Заказ отклонен",
+      body: `Исполнитель ${updatedBooking.performer.name} отклонил ваш запрос.`,
+      type: "BOOKING_REJECTED",
       data: {
-        userId: updatedBooking.customerId,
-        type: "BOOKING_UPDATE",
-        message: message,
-        data: { bookingId: updatedBooking.id, status: "REJECTED" },
+        bookingId: updatedBooking.id,
+        status: "REJECTED",
+        url: "/customer-profile/bookings",
       },
     });
-
-    await sendNotification(
-      updatedBooking.customerId,
-      "BOOKING_REJECTED",
-      message,
-      { bookingId: updatedBooking.id },
-    );
 
     res.json(updatedBooking);
   } catch (error) {

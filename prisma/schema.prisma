@@ -16,11 +16,25 @@ enum BookingStatus {
 }
 
 enum NotificationType {
+  SYSTEM
+  NEW_MESSAGE
+  ADMIN_ALERT
+
+  // Booking related
+  NEW_BOOKING
   BOOKING_REQUEST
   BOOKING_UPDATE
-  SYSTEM
+  BOOKING_ACCEPTED
+  BOOKING_REJECTED
+
+  // Performer related
+  MODERATION_UPDATE
+  NEW_REQUEST
+
+  // Partner related
   PARTNER_REQUEST
-  PARTNER_UPDATE
+  PARTNER_APPROVED
+  PAYOUT_REQUEST
 }
 
 enum SubscriptionTier {
@@ -86,6 +100,7 @@ model User {
   price_range                 Int[]
   latitude                    Float?
   longitude                   Float?
+  fcmToken                    String?
   subscription_plan_id        SubscriptionTier? @default(FREE)
   subscription_end_date       DateTime?
   moderation_status           String            @default("pending_approval")
@@ -366,13 +381,15 @@ model SupportRequest {
 }
 
 model Notification {
-  id        String           @id @default(uuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      NotificationType
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title  String @db.VarChar(255)
+
   message   String           @db.Text
-  data      Json?
-  link      String?
+  type      NotificationType
+  data      Json? // Stores dynamic payload like { "url": "/bookings/123", "bookingId": "123" }
+  link      String? // Optional: You can keep this, though we pass 'url' inside the 'data' JSON now
   isRead    Boolean          @default(false)
   createdAt DateTime         @default(now())
 }

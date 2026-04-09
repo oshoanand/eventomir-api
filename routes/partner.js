@@ -1,12 +1,17 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { sendPartnerWelcomeEmail } from "../mailer/email-sender.js";
-import { getIO } from "../services/socket.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { requireRole } from "../middleware/role-check.js";
 
+// 🚨 IMPORT THE MASTER DISPATCHER
+import { notifyUser } from "../services/notification.js";
+
 const router = Router();
 
+// =================================================================
+// 1. SUBMIT PARTNERSHIP REQUEST (Public Route)
+// =================================================================
 router.post("/partnership-request", async (req, res) => {
   try {
     const { name, email, website } = req.body;
@@ -26,51 +31,37 @@ router.post("/partnership-request", async (req, res) => {
       data: { name, email, website },
     });
 
-    // 3. Send Email to Partner
-    await sendPartnerWelcomeEmail(email, name).catch((err) =>
-      console.error("Failed to send partner email:", err),
+    // 3. Send Email to Partner (Non-blocking)
+    sendPartnerWelcomeEmail(email, name).catch((err) =>
+      console.error("Failed to send partner welcome email:", err),
     );
 
     // ---------------------------------------------------------
-    // 4. CREATE PERSISTENT NOTIFICATIONS FOR ADMINS
+    // 4. NOTIFY ALL ADMINS ROBUSTLY
     // ---------------------------------------------------------
-
-    // Find all users who are administrators
     const admins = await prisma.user.findMany({
       where: { role: "administrator" },
       select: { id: true },
     });
 
     if (admins.length > 0) {
-      // Prepare notification data for each admin
-      const notificationsData = admins.map((admin) => ({
-        userId: admin.id,
-        type: "PARTNER_REQUEST", // Change to "PARTNER_REQUEST" if added to your enum
-        message: `Новая заявка на партнерство от ${name} (${email})`,
-        link: "/partners",
-        data: { partnerName: name, partnerEmail: email, requestId: request.id },
-        isRead: false,
-      }));
-
-      // Bulk create notifications in the database
-      await prisma.notification.createMany({
-        data: notificationsData,
-      });
-
-      // ---------------------------------------------------------
-      // 5. EMIT REAL-TIME SOCKET EVENT
-      // ---------------------------------------------------------
-      const io = getIO();
-
-      // Emit to each admin's personal socket room
-      admins.forEach((admin) => {
-        io.to(admin.id).emit("notification", {
-          type: "PARTNER_REQUEST",
-          message: `Новая заявка на партнерство от ${name}`,
-          link: "/partners",
-          createdAt: new Date().toISOString(),
-        });
-      });
+      // Use Promise.all to dispatch notifications concurrently
+      await Promise.all(
+        admins.map((admin) =>
+          notifyUser({
+            userId: admin.id,
+            title: "🤝 Новая заявка на партнерство",
+            body: `Поступила новая заявка от ${name} (${email}).`,
+            type: "PARTNER_REQUEST",
+            data: {
+              partnerName: name,
+              partnerEmail: email,
+              requestId: request.id,
+              url: "/partners",
+            },
+          }),
+        ),
+      );
     }
 
     res.status(201).json({ message: "Заявка отправлена успешно." });
@@ -80,7 +71,9 @@ router.post("/partnership-request", async (req, res) => {
   }
 });
 
-//  GET Dashboard Data
+// =================================================================
+// 2. GET PARTNER DASHBOARD DATA
+// =================================================================
 router.get(
   "/:userId/dashboard",
   verifyAuth,
@@ -90,8 +83,9 @@ router.get(
       const { userId } = req.params;
 
       // Verify user is requesting their own data
-      if (req.user.id !== userId)
-        return res.status(403).json({ message: "Forbidden" });
+      if (req.user.id !== userId) {
+        return res.status(403).json({ message: "Доступ запрещен" });
+      }
 
       const partner = await prisma.partner.findUnique({
         where: { userId },
@@ -161,7 +155,7 @@ router.get(
         monthlyRevenue: monthlyRevenue.map(({ name, total }) => ({
           name,
           total,
-        })), // clean up output
+        })),
       });
     } catch (error) {
       console.error("Dashboard error:", error);
@@ -170,7 +164,9 @@ router.get(
   },
 );
 
-// 2. PATCH Payment Details
+// =================================================================
+// 3. PATCH PAYMENT DETAILS
+// =================================================================
 router.patch(
   "/:userId/payment-details",
   verifyAuth,
@@ -180,22 +176,26 @@ router.patch(
       const { userId } = req.params;
       const { paymentDetails } = req.body;
 
-      if (req.user.id !== userId)
-        return res.status(403).json({ message: "Forbidden" });
+      if (req.user.id !== userId) {
+        return res.status(403).json({ message: "Доступ запрещен" });
+      }
 
       await prisma.partner.update({
         where: { userId },
         data: { paymentDetails },
       });
 
-      res.json({ message: "Реквизиты обновлены" });
+      res.json({ message: "Реквизиты обновлены успешно" });
     } catch (error) {
+      console.error("Payment details update error:", error);
       res.status(500).json({ message: "Ошибка обновления реквизитов" });
     }
   },
 );
 
-// 3. POST Request Payout
+// =================================================================
+// 4. POST REQUEST PAYOUT
+// =================================================================
 router.post(
   "/:userId/payouts",
   verifyAuth,
@@ -204,8 +204,9 @@ router.post(
     try {
       const { userId } = req.params;
 
-      if (req.user.id !== userId)
-        return res.status(403).json({ message: "Forbidden" });
+      if (req.user.id !== userId) {
+        return res.status(403).json({ message: "Доступ запрещен" });
+      }
 
       // Run inside a transaction to prevent race conditions
       const result = await prisma.$transaction(async (tx) => {
@@ -239,26 +240,41 @@ router.post(
         return { payout, partner };
       });
 
-      // Notify Admin Panel via Socket.IO
-      const io = getIO();
+      // ---------------------------------------------------------
+      // NOTIFY ADMINS VIA MASTER DISPATCHER
+      // ---------------------------------------------------------
       const admins = await prisma.user.findMany({
         where: { role: "administrator" },
+        select: { id: true },
       });
 
-      admins.forEach((admin) => {
-        io.to(admin.id).emit("notification", {
-          type: "SYSTEM",
-          message: `Запрос на выплату ${result.payout.amount}₽ от ${result.partner.user.name || result.partner.user.email}`,
-          link: "/payouts",
-          createdAt: new Date().toISOString(),
-        });
-      });
+      if (admins.length > 0) {
+        const partnerName =
+          result.partner.user.name || result.partner.user.email;
+
+        await Promise.all(
+          admins.map((admin) =>
+            notifyUser({
+              userId: admin.id,
+              title: "💸 Новый запрос на выплату",
+              body: `Запрос на выплату ${result.payout.amount}₽ от партнера ${partnerName}`,
+              type: "PAYOUT_REQUEST",
+              data: {
+                payoutId: result.payout.id,
+                amount: result.payout.amount,
+                url: "/payouts",
+              },
+            }),
+          ),
+        );
+      }
 
       res.status(201).json({
         message: "Запрос на выплату успешно создан",
         data: result.payout,
       });
     } catch (error) {
+      console.error("Payout request error:", error);
       res.status(400).json({ message: error.message || "Ошибка сервера" });
     }
   },

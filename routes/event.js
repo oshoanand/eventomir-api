@@ -1,6 +1,6 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
-import { fetchCached, invalidateKeys } from "../middleware/redis.js";
+import { fetchCached, invalidateKeys } from "../libs/redis.js";
 import { generateCustomOrderId } from "../utils/helper.js";
 import { initTinkoffEventTicketPayment } from "../utils/tinkoff.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
@@ -45,39 +45,31 @@ router.post("/tickets/scan", verifyAuth, async (req, res) => {
     });
 
     if (!order) {
-      return res
-        .status(404)
-        .json({
-          isValid: false,
-          message: "Билет не найден (Ticket not found).",
-        });
+      return res.status(404).json({
+        isValid: false,
+        message: "Билет не найден (Ticket not found).",
+      });
     }
 
     if (order.eventId !== eventId) {
-      return res
-        .status(400)
-        .json({
-          isValid: false,
-          message: "Билет от другого мероприятия (Wrong event).",
-        });
+      return res.status(400).json({
+        isValid: false,
+        message: "Билет от другого мероприятия (Wrong event).",
+      });
     }
 
     if (order.event.hostId !== hostId) {
-      return res
-        .status(403)
-        .json({
-          isValid: false,
-          message: "Вы не являетесь организатором (Unauthorized).",
-        });
+      return res.status(403).json({
+        isValid: false,
+        message: "Вы не являетесь организатором (Unauthorized).",
+      });
     }
 
     if (order.status !== "PAYMENT_SUCCESS" && order.status !== "ACTIVE") {
-      return res
-        .status(400)
-        .json({
-          isValid: false,
-          message: "Билет не оплачен (Ticket not paid).",
-        });
+      return res.status(400).json({
+        isValid: false,
+        message: "Билет не оплачен (Ticket not paid).",
+      });
     }
 
     if (order.isUsed) {
@@ -93,12 +85,10 @@ router.post("/tickets/scan", verifyAuth, async (req, res) => {
     eventEndDate.setHours(eventEndDate.getHours() + 24);
 
     if (now > eventEndDate) {
-      return res
-        .status(400)
-        .json({
-          isValid: false,
-          message: "Срок действия билета истек (Event expired).",
-        });
+      return res.status(400).json({
+        isValid: false,
+        message: "Срок действия билета истек (Event expired).",
+      });
     }
 
     // Mark Ticket as Used

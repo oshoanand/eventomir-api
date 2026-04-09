@@ -1,7 +1,7 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-import { publishEvent } from "../middleware/redis.js";
+import { publishEvent } from "../libs/redis.js";
 
 const router = Router();
 

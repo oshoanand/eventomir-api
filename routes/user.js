@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { fetchCached } from "../middleware/redis.js";
+import { fetchCached } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import prisma from "../libs/prisma.js";
 

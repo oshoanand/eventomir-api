@@ -1,6 +1,6 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
-import { fetchCached } from "../middleware/redis.js";
+import { fetchCached } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { generateTicketPDF } from "../mailer/pdf-generator.js";
 
