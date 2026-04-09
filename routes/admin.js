@@ -10,8 +10,6 @@ import {
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { requireRole } from "../middleware/role-check.js";
 import bcrypt from "bcryptjs";
-
-// 🚨 IMPORT THE NEW MASTER DISPATCHER
 import { notifyUser } from "../services/notification.js";
 
 const router = Router();
@@ -579,8 +577,6 @@ router.patch(
     }
   },
 );
-
-import { admin } from "../libs/firebase.js"; // Your firebase admin SDK
 
 // Route: POST /api/admin/send-notification
 router.post(
