@@ -2,7 +2,7 @@ import { Router } from "express";
 import * as adminService from "../controllers/admin.js";
 import prisma from "../libs/prisma.js";
 import { invalidatePattern } from "../libs/redis.js";
-import { admin, sendPushNotification } from "../lib/firebase.js";
+import { sendPushNotification } from "../libs/firebase.js";
 import {
   sendModerationStatusEmail,
   sendPartnerApprovalEmail,
