@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as adminService from "../controllers/admin.js";
 import prisma from "../libs/prisma.js";
 import { invalidatePattern } from "../libs/redis.js";
+import { admin } from "../libs/firebase.js";
 import {
   sendModerationStatusEmail,
   sendPartnerApprovalEmail,
@@ -575,6 +576,36 @@ router.patch(
     } catch (error) {
       console.error("Error updating partnership status:", error);
       res.status(500).json({ message: "Внутренняя ошибка сервера" });
+    }
+  },
+);
+
+import { admin } from "../libs/firebase.js"; // Your firebase admin SDK
+
+// Route: POST /api/admin/send-notification
+router.post(
+  "/send-notification",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const { type, target, title, body } = req.body;
+
+      const payload = {
+        notification: { title, body },
+        data: { click_action: "FLUTTER_NOTIFICATION_CLICK" }, // Optional data payload
+      };
+
+      if (type === "topic") {
+        await admin.messaging().sendToTopic(target, payload);
+      } else {
+        await admin.messaging().sendToDevice(target, payload);
+      }
+
+      res.status(200).json({ success: true, message: "Notification sent." });
+    } catch (error) {
+      console.error("Admin broadcast error:", error);
+      res.status(500).json({ message: "Failed to send broadcast." });
     }
   },
 );

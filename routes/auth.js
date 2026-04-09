@@ -11,6 +11,9 @@ import {
 import { invalidatePattern } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 
+// 🚨 IMPORT THE MASTER DISPATCHER
+import { notifyUser } from "../services/notification.js";
+
 const router = express.Router();
 
 // ==========================================
@@ -18,7 +21,6 @@ const router = express.Router();
 // ==========================================
 router.patch("/complete-registration", verifyAuth, async (req, res) => {
   try {
-    // 🚨 FIX: Extract accountType and companyName from the body
     const { role, phone, city, accountType, companyName, inn } = req.body;
     const userId = req.user.id;
 
@@ -27,7 +29,6 @@ router.patch("/complete-registration", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "Выбрана недопустимая роль." });
     }
 
-    // 🚨 FIX: Add account_type and company_name to the database update
     const updatedUser = await prisma.user.update({
       where: { id: userId },
       data: {
@@ -40,9 +41,31 @@ router.patch("/complete-registration", verifyAuth, async (req, res) => {
       },
     });
 
-    // Invalidate the cache for the specific role lists so the new user appears
+    // Invalidate the cache for the specific role lists
     if (role === "customer") await invalidatePattern("users:customers_p*");
     if (role === "performer") await invalidatePattern("users:performers_p*");
+
+    // 🚨 NOTIFY ADMINS IF A NEW PERFORMER COMPLETES OAUTH
+    if (role === "performer") {
+      const admins = await prisma.user.findMany({
+        where: { role: "administrator" },
+        select: { id: true },
+      });
+
+      if (admins.length > 0) {
+        await Promise.all(
+          admins.map((admin) =>
+            notifyUser({
+              userId: admin.id,
+              title: "👤 Новый исполнитель (OAuth)",
+              body: `${updatedUser.name} завершил регистрацию через соцсети.`,
+              type: "MODERATION_UPDATE",
+              data: { url: `/users` },
+            }),
+          ),
+        );
+      }
+    }
 
     res.status(200).json({
       message: "Регистрация успешно завершена",
@@ -61,14 +84,12 @@ router.post("/register-performer", async (req, res) => {
   try {
     const { performerData, password, referralId } = req.body;
 
-    // Validate incoming data
     if (!performerData.email || !password || !performerData.name) {
       return res.status(400).json({
         message: "Required fields (email, password, name) are missing.",
       });
     }
 
-    // Check for an existing user
     const existingUser = await prisma.user.findUnique({
       where: { email: performerData.email },
     });
@@ -79,11 +100,9 @@ router.post("/register-performer", async (req, res) => {
         .json({ message: "Пользователь с таким email уже зарегистрирован!" });
     }
 
-    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
     const rawToken = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000); // 2 days
-
     const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
     const newUser = await prisma.user.create({
@@ -140,7 +159,26 @@ router.post("/register-performer", async (req, res) => {
       console.error("Failed to send verification email:", emailError.message);
     }
 
-    // Invalidate Redis Cache
+    // 🚨 NOTIFY ADMINISTRATORS
+    const admins = await prisma.user.findMany({
+      where: { role: "administrator" },
+      select: { id: true },
+    });
+
+    if (admins.length > 0) {
+      await Promise.all(
+        admins.map((admin) =>
+          notifyUser({
+            userId: admin.id,
+            title: "👤 Новый исполнитель",
+            body: `${newUser.name} зарегистрировался и ожидает модерации.`,
+            type: "MODERATION_UPDATE",
+            data: { url: `/users` },
+          }),
+        ),
+      );
+    }
+
     await invalidatePattern("users:performers_p*");
 
     return res.status(201).json({
@@ -209,6 +247,26 @@ router.post("/register-customer", async (req, res) => {
       console.error("Failed to send verification email:", emailError.message);
     }
 
+    // 🚨 NOTIFY ADMINISTRATORS (Optional, but good for tracking growth)
+    const admins = await prisma.user.findMany({
+      where: { role: "administrator" },
+      select: { id: true },
+    });
+
+    if (admins.length > 0) {
+      await Promise.all(
+        admins.map((admin) =>
+          notifyUser({
+            userId: admin.id,
+            title: "👋 Новый клиент",
+            body: `${newUser.name} присоединился к платформе.`,
+            type: "SYSTEM",
+            data: { url: `/users` },
+          }),
+        ),
+      );
+    }
+
     await invalidatePattern("users:customers_p*");
 
     return res.status(201).json({
@@ -227,14 +285,11 @@ router.post("/register-customer", async (req, res) => {
 // ==========================================
 // 3. VERIFICATION & PASSWORD RESET ROUTES
 // ==========================================
-
 router.get("/verify-email", async (req, res) => {
   try {
     const { token } = req.query;
 
-    if (!token) {
-      return res.status(400).send("<h1>Invalid Link</h1>");
-    }
+    if (!token) return res.status(400).send("<h1>Invalid Link</h1>");
 
     const verifyTokenRecord = await prisma.verificationToken.findUnique({
       where: { token: token },
@@ -280,7 +335,7 @@ router.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
 
-    // 🚨 FIX: Return immediately to prevent logic executing and crashing Express with "Headers already sent"
+    // Returns immediately to prevent hanging logic
     if (!user) {
       return res
         .status(200)
@@ -300,7 +355,6 @@ router.post("/forgot-password", async (req, res) => {
         user.email,
         user.name || "Пользователь",
       );
-      console.log(`Reset password email queued `);
     } catch (emailError) {
       console.error("Failed to send reset password email:", emailError.message);
     }
@@ -345,7 +399,7 @@ router.post("/reset-password/:token", async (req, res) => {
   }
 });
 
-// Legacy passthrough routes to controllers (If you are still using them)
+// Legacy passthrough routes to controllers
 router.post("/request-password-reset", async (req, res) => {
   const { email } = req.body;
   try {
@@ -379,13 +433,10 @@ router.post("/resend-verification", async (req, res) => {
         .json({ message: "Email обязателен для заполнения." });
     }
 
-    // 1. Find the user
     const user = await prisma.user.findUnique({
       where: { email: email.toLowerCase() },
     });
 
-    // Security practice: Don't explicitly reveal if an email is registered or not
-    // to prevent email enumeration attacks. Just return a success message.
     if (!user) {
       return res.status(200).json({
         message:
@@ -393,23 +444,19 @@ router.post("/resend-verification", async (req, res) => {
       });
     }
 
-    // 2. Check if already verified
     if (user.emailVerified || user.status === "active") {
       return res.status(400).json({
         message: "Этот аккаунт уже подтвержден. Вы можете войти в систему.",
       });
     }
 
-    // 3. Delete any existing, expired tokens for this user
     await prisma.verificationToken.deleteMany({
       where: { identifier: user.email },
     });
 
-    // 4. Generate a new token
     const rawToken = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000); // 2 days from now
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
 
-    // 5. Save the new token
     await prisma.verificationToken.create({
       data: {
         identifier: user.email,
@@ -419,10 +466,8 @@ router.post("/resend-verification", async (req, res) => {
       },
     });
 
-    // 6. Send the email
     try {
       await sendVerificationEmail(user.email, user.name, rawToken);
-      console.log(`[Success] Resent verification email to ${user.email}`);
     } catch (emailError) {
       console.error("Failed to resend verification email:", emailError.message);
       return res
