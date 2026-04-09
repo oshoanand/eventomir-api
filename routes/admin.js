@@ -2,7 +2,7 @@ import { Router } from "express";
 import * as adminService from "../controllers/admin.js";
 import prisma from "../libs/prisma.js";
 import { invalidatePattern } from "../libs/redis.js";
-import { admin } from "../libs/firebase.js";
+import { admin, sendPushNotification } from "../lib/firebase.js";
 import {
   sendModerationStatusEmail,
   sendPartnerApprovalEmail,
@@ -578,35 +578,68 @@ router.patch(
   },
 );
 
-// Route: POST /api/admin/send-notification
 router.post(
-  "/send-notification",
+  "/notifications/send",
   verifyAuth,
   requireRole(["administrator"]),
   async (req, res) => {
+    const { type, target, title, body } = req.body;
+
+    if (!type || !target || !title || !body) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
     try {
-      const { type, target, title, body } = req.body;
+      // 1. Send via Firebase
+      const response = await sendPushNotification(
+        type,
+        title,
+        body,
+        target,
+        target,
+      );
 
-      const payload = {
-        notification: { title, body },
-        data: { click_action: "FLUTTER_NOTIFICATION_CLICK" }, // Optional data payload
-      };
+      // 2. ✅ Log Success to PostgreSQL via Prisma
+      await prisma.notificationLog.create({
+        data: {
+          title,
+          body,
+          targetType: type, // Prisma matches the string 'topic'/'token' to the Enum automatically
+          target,
+          status: "SENT",
+          messageId: response,
+        },
+      });
 
-      if (type === "topic") {
-        await admin.messaging().sendToTopic(target, payload);
-      } else {
-        await admin.messaging().sendToDevice(target, payload);
+      return res.status(200).json({ success: true, messageId: response });
+    } catch (error) {
+      console.error("FCM Error:", error);
+
+      // 3. ✅ Log Failure to PostgreSQL
+      // We wrap this in a try/catch so logging failure doesn't crash the response
+      try {
+        await prisma.notificationLog.create({
+          data: {
+            title,
+            body,
+            targetType: type,
+            target,
+            status: "FAILED",
+            errorDetails: error.message,
+          },
+        });
+      } catch (logError) {
+        console.error("Failed to write error log to DB:", logError);
       }
 
-      res.status(200).json({ success: true, message: "Notification sent." });
-    } catch (error) {
-      console.error("Admin broadcast error:", error);
-      res.status(500).json({ message: "Failed to send broadcast." });
+      return res
+        .status(500)
+        .json({ error: "Failed to send notification", details: error.message });
     }
   },
 );
 
-router.get("/history", async (req, res) => {
+router.get("/notifications/history", async (req, res) => {
   try {
     const logs = await prisma.notificationLog.findMany({
       take: 50,
