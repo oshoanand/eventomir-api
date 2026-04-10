@@ -76,7 +76,7 @@ router.get("/customers", async (req, res) => {
           where: whereClause,
           skip: skip,
           take: limit,
-          orderBy: { createdAt: "desc" }, // Fixed: created_at -> createdAt
+          orderBy: { created_at: "desc" },
         }),
       ]);
 

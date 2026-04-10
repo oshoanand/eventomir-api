@@ -227,6 +227,98 @@ router.get(
 );
 
 // =================================================================
+//                 🆕 CUSTOMER DETAILS ROUTE
+// =================================================================
+
+router.get(
+  "/customers/:id",
+  requireRole(["administrator", "support"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // 1. Fetch the customer and their related data
+      const customer = await prisma.user.findUnique({
+        where: { id },
+        include: {
+          // Fetch all bookings where this user is the customer
+          bookings_as_customer: {
+            include: {
+              performer: {
+                select: { id: true, name: true, email: true, phone: true },
+              },
+            },
+            orderBy: { createdAt: "desc" }, // Adjust to created_at if your schema uses snake_case here
+          },
+          // Fetch all paid requests/transactions
+          paid_requests: {
+            orderBy: { createdAt: "desc" }, // Adjust to created_at if your schema uses snake_case here
+          },
+        },
+      });
+
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+
+      // 2. Calculate the quick stats for the UI
+      const totalBookings = customer.bookings_as_customer.length;
+      const confirmedBookings = customer.bookings_as_customer.filter(
+        (b) => b.status === "confirmed" || b.status === "completed",
+      ).length;
+      const totalPaidRequests = customer.paid_requests.length;
+
+      // 3. Map the data exactly to the frontend interface (AdminCustomerDetails)
+      const mappedData = {
+        id: customer.id,
+        name: customer.name || "Unknown User",
+        email: customer.email,
+        phone: customer.phone,
+        city: customer.city,
+        profilePicture: customer.profile_picture,
+        moderationStatus: customer.moderation_status,
+        status: customer.status,
+        createdAt: customer.created_at,
+
+        // Map Bookings
+        bookings: customer.bookings_as_customer.map((b) => ({
+          id: b.id,
+          date: b.date,
+          status: b.status,
+          price: b.price,
+          details: b.details,
+          createdAt: b.createdAt,
+          performerName: b.performer?.name || "Неизвестный исполнитель",
+          performerEmail: b.performer?.email,
+          performerPhone: b.performer?.phone,
+        })),
+
+        // Map Paid Requests (Transactions)
+        paidRequests: customer.paid_requests.map((pr) => ({
+          id: pr.id,
+          status: pr.status,
+          amount: pr.amount,
+          description: pr.description,
+          createdAt: pr.createdAt || pr.created_at,
+        })),
+
+        // Attach Calculated Stats
+        stats: {
+          totalBookings,
+          confirmedBookings,
+          totalPaidRequests,
+        },
+      };
+
+      res.status(200).json(mappedData);
+    } catch (error) {
+      console.error("Error fetching admin customer details:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  },
+);
+
+// =================================================================
 
 router.get("/dashboard", async (req, res) => {
   try {
