@@ -682,24 +682,24 @@ router.post(
     }
 
     try {
-      // 1. Send via Firebase
+      // 1. ✅ FIX: Pass a proper data object instead of 'target'
       const response = await sendPushNotification(
         type,
         title,
         body,
         target,
-        target,
+        { url: "/" }, // <-- Tell the Android PWA where to go when tapped
       );
 
-      // 2. ✅ Log Success to PostgreSQL via Prisma
+      // 2. Log Success to PostgreSQL via Prisma
       await prisma.notificationLog.create({
         data: {
           title,
           body,
-          targetType: type, // Prisma matches the string 'topic'/'token' to the Enum automatically
+          targetType: type,
           target,
           status: "SUCCESS",
-          messageId: response,
+          messageId: response?.messageId || "multicast_success", // Adjust based on return type
         },
       });
 
@@ -707,8 +707,7 @@ router.post(
     } catch (error) {
       console.error("FCM Error:", error);
 
-      // 3. ✅ Log Failure to PostgreSQL
-      // We wrap this in a try/catch so logging failure doesn't crash the response
+      // 3. Log Failure to PostgreSQL
       try {
         await prisma.notificationLog.create({
           data: {

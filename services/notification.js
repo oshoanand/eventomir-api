@@ -76,7 +76,7 @@ export const notifyUser = async ({
           body,
           targetType: "topic",
           target,
-          status: "SENT",
+          status: "SUCCESS",
           messageId: response,
         },
       });
@@ -101,7 +101,7 @@ export const notifyUser = async ({
           body,
           targetType: "token",
           target,
-          status: "SENT",
+          status: "SUCCESS",
           messageId: fcmResponse,
         },
       });

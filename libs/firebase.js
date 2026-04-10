@@ -1,4 +1,3 @@
-// libs/firebase.js
 import admin from "firebase-admin";
 import { getMessaging } from "firebase-admin/messaging";
 import { getAuth } from "firebase-admin/auth";
@@ -22,13 +21,20 @@ const firebaseAuth = getAuth();
  */
 const sendPushNotification = async (type, title, body, target, data = {}) => {
   try {
+    // ✅ SAFEGUARD: Ensure data is an actual object, not a string or array
+    const safeData =
+      typeof data === "object" && data !== null && !Array.isArray(data)
+        ? data
+        : {};
+
     // Ensure all data payload values are strings (FCM requirement)
-    const stringifiedData = Object.keys(data).reduce((acc, key) => {
-      acc[key] = String(data[key]);
+    const stringifiedData = Object.keys(safeData).reduce((acc, key) => {
+      acc[key] = String(safeData[key]);
       return acc;
     }, {});
 
-    const message = {
+    // ✅ Base message structure
+    const baseMessage = {
       notification: { title, body },
       data: {
         sentAt: new Date().toISOString(),
@@ -47,34 +53,38 @@ const sendPushNotification = async (type, title, body, target, data = {}) => {
       webpush: {
         headers: { Urgency: "high" },
         notification: {
-          icon: "/icons/icon-192x192.png",
+          // 🚨 CRITICAL FOR ANDROID PWA: Ensure this image file actually exists in your frontend /public folder!
+          icon: "/icons/icon-192.png ",
           requireInteraction: true,
         },
         fcmOptions: {
-          link: data.url || "/", // Routes the PWA user on click
+          link: safeData.url || "/", // Routes the PWA user on click
         },
       },
     };
 
     if (type === "topic") {
-      message.topic = target;
-      return await messaging.send(message);
+      return await messaging.send({
+        ...baseMessage,
+        topic: target,
+      });
     } else if (type === "token") {
-      // Supports sending to a single token or an array of tokens
       if (Array.isArray(target)) {
-        const response = await messaging.sendEachForMulticast({
+        // ✅ Multicast expects 'tokens' array, not 'token' string
+        return await messaging.sendEachForMulticast({
+          ...baseMessage,
           tokens: target,
-          ...message,
         });
-        return response;
       } else {
-        message.token = target;
-        return await messaging.send(message);
+        return await messaging.send({
+          ...baseMessage,
+          token: target,
+        });
       }
     }
   } catch (error) {
     console.error("FCM Sending Failed:", error.message);
-    throw error; // Throw so the caller can handle dead tokens
+    throw error;
   }
 };
 
