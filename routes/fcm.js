@@ -58,22 +58,22 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
     await Promise.allSettled(subscriptionPromises);
 
     // 4. TRIGGER WELCOME PUSH ON FIRST LOGIN
-    if (!user.welcomePushSent) {
-      await notifyUser({
-        userId: user.id,
-        title: "Добро пожаловать в Eventomir! 🎉",
-        body: "Ваш профиль отправлен на модерацию. Мы сообщим вам, когда он будет одобрен.",
-        type: "SYSTEM",
-        data: { url: "/performer-profile" },
-        saveToDb: true,
-      });
+    // if (!user.welcomePushSent) {
+    //   await notifyUser({
+    //     userId: user.id,
+    //     title: "Добро пожаловать в Eventomir! 🎉",
+    //     body: "Ваш профиль отправлен на модерацию. Мы сообщим вам, когда он будет одобрен.",
+    //     type: "SYSTEM",
+    //     data: { url: "/performer-profile" },
+    //     saveToDb: true,
+    //   });
 
-      // Mark the welcome push as sent so they never get it again
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { welcomePushSent: true },
-      });
-    }
+    //   // Mark the welcome push as sent so they never get it again
+    //   await prisma.user.update({
+    //     where: { id: user.id },
+    //     data: { welcomePushSent: true },
+    //   });
+    // }
 
     return res.status(200).json({
       success: true,
