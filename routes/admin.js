@@ -676,6 +676,7 @@ router.post(
   requireRole(["administrator"]),
   async (req, res) => {
     const { type, target, title, body } = req.body;
+    console.log(req.body);
 
     if (!type || !target || !title || !body) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -683,14 +684,11 @@ router.post(
 
     try {
       // 1. ✅ FIX: Pass a proper data object instead of 'target'
-      const response = await sendPushNotification(
-        type,
-        title,
-        body,
-        target,
-        { url: "/" }, // <-- Tell the Android PWA where to go when tapped
-      );
+      const response = await sendPushNotification(type, title, body, target, {
+        url: "/",
+      });
 
+      console.log(response);
       // 2. Log Success to PostgreSQL via Prisma
       await prisma.notificationLog.create({
         data: {
@@ -699,7 +697,7 @@ router.post(
           targetType: type,
           target,
           status: "SUCCESS",
-          messageId: response?.messageId || "multicast_success", // Adjust based on return type
+          messageId: response?.messageId || "multicast_success",
         },
       });
 

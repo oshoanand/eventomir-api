@@ -10,8 +10,6 @@ import {
 } from "../mailer/email-sender.js";
 import { invalidatePattern } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-
-// 🚨 IMPORT THE MASTER DISPATCHER
 import { notifyUser } from "../services/notification.js";
 
 const router = express.Router();
@@ -41,11 +39,35 @@ router.patch("/complete-registration", verifyAuth, async (req, res) => {
       },
     });
 
+    // 🚨 ROBUST FIX: Automatically assign FREE plan if they selected "performer"
+    if (role === "performer") {
+      const freePlan = await prisma.subscriptionPlan.findUnique({
+        where: { tier: "FREE" },
+      });
+
+      if (freePlan) {
+        // Ensure we don't duplicate subscriptions if they already have one
+        const existingSub = await prisma.userSubscription.findUnique({
+          where: { userId: userId },
+        });
+
+        if (!existingSub) {
+          await prisma.userSubscription.create({
+            data: {
+              userId: userId,
+              planId: freePlan.id,
+              isActive: true,
+            },
+          });
+        }
+      }
+    }
+
     // Invalidate the cache for the specific role lists
     if (role === "customer") await invalidatePattern("users:customers_p*");
     if (role === "performer") await invalidatePattern("users:performers_p*");
 
-    // 🚨 NOTIFY ADMINS IF A NEW PERFORMER COMPLETES OAUTH
+    // NOTIFY ADMINS IF A NEW PERFORMER COMPLETES OAUTH
     if (role === "performer") {
       const admins = await prisma.user.findMany({
         where: { role: "administrator" },
@@ -105,6 +127,11 @@ router.post("/register-performer", async (req, res) => {
     const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000); // 2 days
     const defaultImage = `${process.env.API_BASE_URL}/uploads/no-image.jpg`;
 
+    // 🚨 ROBUST FIX: Fetch the FREE plan from the DB to link it properly
+    const freePlan = await prisma.subscriptionPlan.findUnique({
+      where: { tier: "FREE" },
+    });
+
     const newUser = await prisma.user.create({
       data: {
         email: performerData.email,
@@ -119,6 +146,17 @@ router.post("/register-performer", async (req, res) => {
         moderation_status: "pending_approval",
         subscription_plan_id: "FREE",
         profile_picture: defaultImage,
+
+        // Atomically create the UserSubscription record
+        ...(freePlan && {
+          subscription: {
+            create: {
+              planId: freePlan.id,
+              isActive: true,
+            },
+          },
+        }),
+
         verificationTokens: {
           create: {
             token: rawToken,
@@ -131,16 +169,18 @@ router.post("/register-performer", async (req, res) => {
 
     // Handle the referral link
     if (referralId) {
+      // 🚨 FIX: Ensure 'where' uses exact schema property (referralId, not referral_id)
       const partner = await prisma.partner.findUnique({
-        where: { referral_id: referralId },
+        where: { referralId: referralId },
       });
 
       if (partner) {
         await prisma.referralEvent.create({
           data: {
-            partnerId: partner.id,
-            referredUserId: newUser.id,
-            eventType: "registration",
+            // 🚨 FIX: Match snake_case fields defined in Prisma schema
+            partner_id: partner.id,
+            referred_user_id: newUser.id,
+            event_type: "registration",
             status: "pending",
           },
         });
@@ -159,7 +199,7 @@ router.post("/register-performer", async (req, res) => {
       console.error("Failed to send verification email:", emailError.message);
     }
 
-    // 🚨 NOTIFY ADMINISTRATORS
+    // NOTIFY ADMINISTRATORS
     const admins = await prisma.user.findMany({
       where: { role: "administrator" },
       select: { id: true },
@@ -247,7 +287,6 @@ router.post("/register-customer", async (req, res) => {
       console.error("Failed to send verification email:", emailError.message);
     }
 
-    // 🚨 NOTIFY ADMINISTRATORS (Optional, but good for tracking growth)
     const admins = await prisma.user.findMany({
       where: { role: "administrator" },
       select: { id: true },
@@ -335,7 +374,6 @@ router.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
 
-    // Returns immediately to prevent hanging logic
     if (!user) {
       return res
         .status(200)

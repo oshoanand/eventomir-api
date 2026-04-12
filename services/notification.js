@@ -30,6 +30,10 @@ export const notifyUser = async ({
   data,
   saveToDb = true,
 }) => {
+  // 🚨 FIX 1: Define `target` and `currentTargetType` at the top scope so the catch block can see it
+  let target = userId;
+  let currentTargetType = "token";
+
   try {
     // 1. Save to Database (In-App Notification Bell)
     if (saveToDb) {
@@ -47,7 +51,6 @@ export const notifyUser = async ({
     // 2. Emit Real-Time Socket Event (Instant delivery for active users)
     await sendSocketNotification(userId, type, body, { title, ...data });
 
-    // 🚨 FIX 2: Select 'fcmToken' (String) matching your schema
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { phone: true, fcmToken: true },
@@ -60,6 +63,9 @@ export const notifyUser = async ({
 
     if (topicName) {
       // 🚀 SCENARIO A: Topic-Based Delivery
+      target = topicName;
+      currentTargetType = "topic";
+
       const response = await sendPushNotification(
         "topic",
         title,
@@ -75,7 +81,7 @@ export const notifyUser = async ({
           title,
           body,
           targetType: "topic",
-          target,
+          target: target, // Now correctly defined
           status: "SUCCESS",
           messageId: response,
         },
@@ -84,7 +90,9 @@ export const notifyUser = async ({
       console.log(`✅ FCM Sent via Topic: ${topicName}`);
     } else if (user.fcmToken) {
       // 🔄 SCENARIO B: Fallback to Token-Based Delivery
-      // Wrap the single string token in an array for Firebase
+      target = user.fcmToken;
+      currentTargetType = "token";
+
       const tokens = [user.fcmToken];
 
       const fcmResponse = await sendPushNotification(
@@ -100,7 +108,7 @@ export const notifyUser = async ({
           title,
           body,
           targetType: "token",
-          target,
+          target: target, // Now correctly defined
           status: "SUCCESS",
           messageId: fcmResponse,
         },
@@ -127,14 +135,13 @@ export const notifyUser = async ({
     console.error("❌ Notification Dispatcher Error:", error);
 
     // 3. ✅ Log Failure to PostgreSQL
-    // We wrap this in a try/catch so logging failure doesn't crash the response
     try {
       await prisma.notificationLog.create({
         data: {
           title,
           body,
-          targetType: type,
-          target,
+          targetType: currentTargetType, // 🚨 FIX 3: Passed proper TargetType enum, not the notification 'type'
+          target: target,
           status: "FAILED",
           errorDetails: error.message,
         },
@@ -143,8 +150,9 @@ export const notifyUser = async ({
       console.error("Failed to write error log to DB:", logError);
     }
 
-    return res
-      .status(500)
-      .json({ error: "Failed to send notification", details: error.message });
+    // 🚨 FIX 2: Removed `res.status(500)` because `res` is not available in a utility function.
+    // Returning false lets the calling route (like /register-performer) finish successfully
+    // even if the notification push fails.
+    return false;
   }
 };

@@ -11,6 +11,9 @@ import { initSocket } from "./libs/socket.js";
 import { initializeMinio } from "./utils/minioClient.js";
 import { connectRedis } from "./libs/redis.js";
 
+// 🚨 IMPORT THE SUBSCRIPTION CRON WORKER
+import { startSubscriptionCron } from "./cron/subscription-worker.js";
+
 // Routes
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
@@ -24,7 +27,7 @@ import articleRoutes from "./routes/article.js";
 import bookingRoutes from "./routes/booking.js";
 import notificationRoutes from "./routes/notification.js";
 import paymentRoutes from "./routes/payment.js";
-import tarrifPlanRoutes from "./routes/subscription-plan.js";
+import subscriptionRoutes from "./routes/subscription.js";
 import chatRoutes from "./routes/chat.js";
 import partnerRoutes from "./routes/partner.js";
 import eventRoutes from "./routes/event.js";
@@ -47,37 +50,17 @@ async function initializeExpressServer() {
   // Create HTTP Server explicitly (Required for Socket.io)
   const server = http.createServer(app);
 
-  // 🚨 1. Define Allowed Domains FIRST (Shared between Express and Socket.io)
+  // 1. Define Allowed Domains FIRST (Shared between Express and Socket.io)
   const allowedDomains = [
     process.env.PARTNER_APP_URL,
     process.env.WEB_APP_URL,
     process.env.ADMIN_PANEL_URL,
   ].filter(Boolean); // Removes undefined/null if env vars are missing
 
-  // 🚨 2. Initialize Socket.io securely by passing the allowed domains
+  // 2. Initialize Socket.io securely by passing the allowed domains
   initSocket(server, allowedDomains);
 
-  // --- Express Middleware ---
-  app.use(express.json());
-
-  // Serve Static Files (Kept for legacy uploads, though new ones go to MinIO)
-  app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-  // Logging Middleware
-  app.use((req, res, next) => {
-    console.log(`${req.method} : ${req.path}`);
-    next();
-  });
-
-  app.use(
-    express.urlencoded({
-      parameterLimit: 100000,
-      limit: "50mb",
-      extended: true,
-    }),
-  );
-
-  // 🚨 3. Express CORS Setup
+  // 3. Express CORS Setup (Must be before routes)
   app.use(
     cors({
       origin: function (origin, callback) {
@@ -95,6 +78,34 @@ async function initializeExpressServer() {
     }),
   );
 
+  // Serve Static Files (Kept for legacy uploads, though new ones go to MinIO)
+  app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+  // Logging Middleware
+  app.use((req, res, next) => {
+    console.log(`${req.method} : ${req.path}`);
+    next();
+  });
+
+  // 🚨 CRITICAL FIX: Mount Webhooks BEFORE express.json()
+  // Payment gateways (Tinkoff/Stripe/etc) require raw bodies to verify webhook signatures.
+  // If express.json() parses it first, the signature check will fail.
+  app.use(
+    "/api/webhooks",
+    express.raw({ type: "application/json" }),
+    webhookRoutes,
+  );
+
+  // --- Standard Express Middleware for all other routes ---
+  app.use(express.json());
+  app.use(
+    express.urlencoded({
+      parameterLimit: 100000,
+      limit: "50mb",
+      extended: true,
+    }),
+  );
+
   // --- External Services Initialization ---
 
   // Connect to Redis BEFORE mounting routes
@@ -104,7 +115,10 @@ async function initializeExpressServer() {
   // This will automatically create your bucket if it doesn't exist
   await initializeMinio();
 
-  // --- Mount Routes ---
+  // 🚨 START THE BACKGROUND SUBSCRIPTION SWEEPER
+  startSubscriptionCron();
+
+  // --- Mount Standard Routes ---
   app.use("/api/admin", adminRoutes);
   app.use("/api/articles", articleRoutes);
   app.use("/api/auth", authRoutes);
@@ -117,7 +131,7 @@ async function initializeExpressServer() {
   app.use("/api/pricing", pricingRoutes);
   app.use("/api/requests", requestRoutes);
   app.use("/api/settings", settingRoutes);
-  app.use("/api/tariff/plans", tarrifPlanRoutes);
+  app.use("/api/subscriptions", subscriptionRoutes);
   app.use("/api/users", userRoutes);
   app.use("/api/partners", partnerRoutes);
   app.use("/api/events", eventRoutes);
@@ -125,7 +139,6 @@ async function initializeExpressServer() {
   app.use("/api/search", searchRoutes);
   app.use("/api/reviews", reviewsRoutes);
   app.use("/api/wallet", walletRoutes);
-  app.use("/api/webhooks", webhookRoutes);
   app.use("/api/fcm", fcmRoutes);
 
   // --- Server Start ---

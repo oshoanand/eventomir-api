@@ -84,6 +84,14 @@ enum FCMStatus {
   FAILED
 }
 
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+  CANCELLED
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -131,7 +139,9 @@ model User {
   favorite_performers         Json?
   welcomePushSent             Boolean           @default(false)
 
-  partner_profile Partner?
+  referredById    String?
+  referredBy      Partner? @relation("ReferredUsers", fields: [referredById], references: [id])
+  partner_profile Partner? @relation("PartnerProfile")
 
   reviews_written       Review[]      @relation("CustomerReviews")
   reviews_received      Review[]      @relation("PerformerReviews")
@@ -219,27 +229,6 @@ model VerificationToken {
 // ==========================================
 // CORE PLATFORM MODELS
 // ==========================================
-
-model Partner {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  referralId           String  @unique
-  balance              Float   @default(0)
-  totalEarned          Float   @default(0)
-  totalRegistrations   Int     @default(0)
-  totalPaidConversions Int     @default(0)
-  clicks               Int     @default(0)
-  minPayout            Float   @default(1500)
-  paymentDetails       String? @db.Text
-
-  referralEvents ReferralEvent[]
-  payoutRequests PayoutRequest[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
 
 model Review {
   id               String    @id @default(cuid())
@@ -429,6 +418,10 @@ model Payment {
   paidRequest PaidRequest?
 }
 
+// ==========================================
+// SUBSCRIPTION PLANS
+// ==========================================
+
 model SubscriptionPlan {
   id              String           @id @default(uuid())
   name            String
@@ -438,7 +431,8 @@ model SubscriptionPlan {
   priceHalfYearly Int?             @default(0)
   priceYearly     Int?             @default(0)
 
-  features  String[]
+  features Json @default("{}")
+
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -461,31 +455,6 @@ model UserSubscription {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-model PayoutRequest {
-  id              String   @id @default(cuid())
-  partner_id      String
-  amount          Float
-  status          String   @default("pending")
-  payment_details String?  @db.Text
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
-
-  partner Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
-}
-
-model ReferralEvent {
-  id                String   @id @default(cuid())
-  partner_id        String
-  referred_user_id  String
-  commission_amount Float?
-  event_type        String
-  status            String?  @default("pending")
-  created_at        DateTime @default(now())
-
-  partner       Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
-  referred_user User    @relation("ReferredUser", fields: [referred_user_id], references: [id], onDelete: Cascade)
 }
 
 // ==========================================
@@ -617,16 +586,6 @@ model Prompt {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model PartnershipRequest {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  website   String
-  status    Status   @default(PENDING)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 model WalletTransaction {
   id     String @id @default(uuid())
   userId String
@@ -651,4 +610,69 @@ model NotificationLog {
   errorDetails String?
 
   @@index([sentAt])
+}
+
+// ==========================================
+// PARTNER
+// ==========================================
+
+model PartnershipRequest {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String?
+  city      String?
+  website   String?
+  status    Status   @default(PENDING)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Partner {
+  id                   String  @id @default(uuid())
+  referralId           String  @unique // This acts as your affiliate link code
+  balance              Float   @default(0)
+  totalEarned          Float   @default(0)
+  totalRegistrations   Int     @default(0)
+  totalPaidConversions Int     @default(0)
+  clicks               Int     @default(0)
+  minPayout            Float   @default(1500)
+  paymentDetails       String? @db.Text
+
+  referredUsers User[] @relation("ReferredUsers")
+
+  userId String @unique
+  user   User   @relation("PartnerProfile", fields: [userId], references: [id], onDelete: Cascade)
+
+  referralEvents ReferralEvent[]
+  payoutRequests PayoutRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ReferralEvent {
+  id               String  @id @default(cuid())
+  partner_id       String
+  referred_user_id String?
+
+  commission_amount Float?
+  event_type        String
+  status            String?  @default("pending")
+  created_at        DateTime @default(now())
+
+  partner       Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
+  referred_user User?   @relation("ReferredUser", fields: [referred_user_id], references: [id], onDelete: Cascade)
+}
+
+model PayoutRequest {
+  id              String       @id @default(cuid())
+  partner_id      String
+  amount          Float
+  status          PayoutStatus @default(PENDING)
+  payment_details String?      @db.Text
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
+
+  partner Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
 }

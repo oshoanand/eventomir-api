@@ -3,8 +3,6 @@ import prisma from "../libs/prisma.js";
 import { sendPartnerWelcomeEmail } from "../mailer/email-sender.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { requireRole } from "../middleware/role-check.js";
-
-// 🚨 IMPORT THE MASTER DISPATCHER
 import { notifyUser } from "../services/notification.js";
 
 const router = Router();
@@ -14,30 +12,46 @@ const router = Router();
 // =================================================================
 router.post("/partnership-request", async (req, res) => {
   try {
-    const { name, email, website } = req.body;
+    // 1. Extract the new fields (phone, city) along with the others
+    const { name, email, phone, city, website } = req.body;
 
-    // 1. Check if existing request is already pending
+    // 2. Basic validation to prevent empty submissions bypassing the frontend
+    if (!name || !email || !phone || !city) {
+      return res.status(400).json({
+        message: "Имя, email, телефон и город обязательны для заполнения.",
+      });
+    }
+
+    // 3. Check if an existing request is already pending for this email
     const existing = await prisma.partnershipRequest.findFirst({
-      where: { email, status: "PENDING" },
+      where: { email, status: "PENDING" }, // Schema uses strict Status Enum
     });
+
     if (existing) {
       return res.status(400).json({
         message: "Заявка с таким email уже находится на рассмотрении.",
       });
     }
 
-    // 2. Save Request to DB
+    // 4. Save Request to DB (Website is optional and will save as null if empty)
     const request = await prisma.partnershipRequest.create({
-      data: { name, email, website },
+      data: {
+        name,
+        email,
+        phone,
+        city,
+        website,
+        status: "PENDING",
+      },
     });
 
-    // 3. Send Email to Partner (Non-blocking)
+    // 5. Send Email to Partner (Non-blocking)
     sendPartnerWelcomeEmail(email, name).catch((err) =>
       console.error("Failed to send partner welcome email:", err),
     );
 
     // ---------------------------------------------------------
-    // 4. NOTIFY ALL ADMINS ROBUSTLY
+    // 6. NOTIFY ALL ADMINS ROBUSTLY
     // ---------------------------------------------------------
     const admins = await prisma.user.findMany({
       where: { role: "administrator" },
@@ -45,17 +59,18 @@ router.post("/partnership-request", async (req, res) => {
     });
 
     if (admins.length > 0) {
-      // Use Promise.all to dispatch notifications concurrently
       await Promise.all(
         admins.map((admin) =>
           notifyUser({
             userId: admin.id,
             title: "🤝 Новая заявка на партнерство",
-            body: `Поступила новая заявка от ${name} (${email}).`,
+            body: `Поступила новая заявка от ${name} (${email}). Город: ${city}.`,
             type: "PARTNER_REQUEST",
             data: {
               partnerName: name,
               partnerEmail: email,
+              partnerPhone: phone,
+              partnerCity: city,
               requestId: request.id,
               url: "/partners",
             },
@@ -82,17 +97,17 @@ router.get(
     try {
       const { userId } = req.params;
 
-      // Verify user is requesting their own data
       if (req.user.id !== userId) {
         return res.status(403).json({ message: "Доступ запрещен" });
       }
 
+      // Fetch Partner mapping to exact schema relations and fields
       const partner = await prisma.partner.findUnique({
         where: { userId },
         include: {
           referralEvents: {
-            orderBy: { created_at: "desc" },
-            take: 50, // Get the 50 most recent events
+            orderBy: { created_at: "desc" }, // Matches schema: created_at
+            take: 50,
           },
         },
       });
@@ -101,7 +116,7 @@ router.get(
         return res.status(404).json({ message: "Профиль партнера не найден." });
       }
 
-      // Calculate Monthly Revenue (Last 6 months)
+      // Calculate Monthly Revenue
       const monthlyRevenue = [];
       const monthNames = [
         "Янв",
@@ -118,10 +133,11 @@ router.get(
         "Дек",
       ];
 
-      // Initialize last 6 months with 0
       for (let i = 5; i >= 0; i--) {
         const d = new Date();
-        d.setMonth(d.getMonth() - i);
+        d.setDate(1); // Prevent overflow
+        d.setMonth(new Date().getMonth() - i);
+
         monthlyRevenue.push({
           name: monthNames[d.getMonth()],
           total: 0,
@@ -130,14 +146,14 @@ router.get(
         });
       }
 
-      // Populate revenue
       partner.referralEvents.forEach((event) => {
-        if (event.status === "paid" && event.commissionAmount) {
+        // Matches schema: commission_amount and created_at
+        if (event.status === "paid" && event.commission_amount) {
           const d = new Date(event.created_at);
           const targetMonth = monthlyRevenue.find(
             (m) => m.monthRaw === d.getMonth() && m.year === d.getFullYear(),
           );
-          if (targetMonth) targetMonth.total += event.commissionAmount;
+          if (targetMonth) targetMonth.total += event.commission_amount;
         }
       });
 
@@ -182,7 +198,7 @@ router.patch(
 
       await prisma.partner.update({
         where: { userId },
-        data: { paymentDetails },
+        data: { paymentDetails }, // Matches schema: paymentDetails (camelCase)
       });
 
       res.json({ message: "Реквизиты обновлены успешно" });
@@ -208,7 +224,6 @@ router.post(
         return res.status(403).json({ message: "Доступ запрещен" });
       }
 
-      // Run inside a transaction to prevent race conditions
       const result = await prisma.$transaction(async (tx) => {
         const partner = await tx.partner.findUnique({
           where: { userId },
@@ -221,17 +236,17 @@ router.post(
         if (!partner.paymentDetails)
           throw new Error("Укажите платежные реквизиты перед запросом выплаты");
 
-        // 1. Create Payout Request
+        // Create Payout Request matching snake_case schema fields
         const payout = await tx.payoutRequest.create({
           data: {
             partner_id: partner.id,
             amount: partner.balance,
             payment_details: partner.paymentDetails,
-            status: "pending",
+            status: "PENDING", // Matches schema: PayoutStatus enum
           },
         });
 
-        // 2. Reset Partner Balance
+        // Reset Partner Balance
         await tx.partner.update({
           where: { id: partner.id },
           data: { balance: 0 },
@@ -240,9 +255,7 @@ router.post(
         return { payout, partner };
       });
 
-      // ---------------------------------------------------------
-      // NOTIFY ADMINS VIA MASTER DISPATCHER
-      // ---------------------------------------------------------
+      // Notify Admins
       const admins = await prisma.user.findMany({
         where: { role: "administrator" },
         select: { id: true },
