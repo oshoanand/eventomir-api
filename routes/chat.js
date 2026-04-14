@@ -1,47 +1,70 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-import { publishEvent } from "../libs/redis.js";
+import { redis } from "../libs/redis.js";
+import multer from "multer";
+
+// Image Upload Imports
+import {
+  minioClient,
+  MINIO_BUCKET_NAME,
+  MINIO_PUBLIC_URL,
+} from "../utils/minioClient.js";
+import { optimizeAndUpload } from "../utils/imageProcessor.js";
 
 const router = Router();
 
-// ==========================================
-// 1. GET TOTAL UNREAD COUNT (For Navbar Badge)
-// GET /api/chats/unread-count
-// ==========================================
-router.get("/unread-count", verifyAuth, async (req, res) => {
-  try {
-    const count = await prisma.message.count({
-      where: {
-        chat: {
-          participants: { some: { id: req.user.id } },
-        },
-        senderId: { not: req.user.id },
-        isRead: false,
-      },
-    });
-    res.status(200).json({ count });
-  } catch (error) {
-    console.error("Unread Count Error:", error);
-    res.status(500).json({ message: "Error fetching unread count" });
-  }
+// Configure multer to store files in memory for processing before MinIO upload
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
+  },
 });
 
 // ==========================================
-// 2. GET INBOX (Chat List with logic)
-// GET /api/chats
+// 1. GET ALL CHAT SESSIONS (Universal Inbox)
+// GET /api/chats/sessions?userId=xyz
 // ==========================================
-router.get("/", verifyAuth, async (req, res) => {
-  try {
-    const currentUserId = req.user.id;
+router.get("/sessions", verifyAuth, async (req, res) => {
+  // Use user ID from auth middleware for security, or fallback to query param if needed
+  const userId = req.user?.id || req.query.userId;
 
-    const chats = await prisma.chat.findMany({
+  if (!userId) {
+    return res.status(400).json({ message: "userId required" });
+  }
+
+  try {
+    // 1. Fetch the list of online user IDs from Redis
+    const onlineUsers = await redis.smembers("online_users");
+
+    const sessions = await prisma.chatSession.findMany({
       where: {
-        participants: { some: { id: currentUserId } },
+        OR: [{ user1Id: userId }, { user2Id: userId }],
       },
       include: {
-        participants: {
-          select: { id: true, name: true, profile_picture: true, role: true },
+        user1: {
+          select: {
+            id: true,
+            name: true,
+            profilePicture: true,
+            role: true,
+            updatedAt: true,
+          },
+        },
+        user2: {
+          select: {
+            id: true,
+            name: true,
+            profilePicture: true,
+            role: true,
+            updatedAt: true,
+          },
         },
         messages: {
           orderBy: { createdAt: "desc" },
@@ -50,10 +73,7 @@ router.get("/", verifyAuth, async (req, res) => {
         _count: {
           select: {
             messages: {
-              where: {
-                isRead: false,
-                senderId: { not: currentUserId },
-              },
+              where: { isRead: false, senderId: { not: userId } },
             },
           },
         },
@@ -61,170 +81,253 @@ router.get("/", verifyAuth, async (req, res) => {
       orderBy: { updatedAt: "desc" },
     });
 
-    const formattedChats = chats.map((chat) => ({
-      ...chat,
-      unreadCount: chat._count.messages,
-    }));
+    // 2. Efficiently fetch "Last Seen" for all potential partners from Redis
+    const partnerIds = sessions.map((s) =>
+      s.user1Id === userId ? s.user2Id : s.user1Id,
+    );
 
-    res.status(200).json(formattedChats);
+    const lastSeenKeys = partnerIds.map((id) => `last_seen:${id}`);
+    const lastSeenValues =
+      lastSeenKeys.length > 0 ? await redis.mget(lastSeenKeys) : [];
+
+    // Create a map for quick lookup: { "userId": "timestamp" }
+    const lastSeenMap = {};
+    partnerIds.forEach((id, index) => {
+      lastSeenMap[id] = lastSeenValues[index];
+    });
+
+    const formattedSessions = sessions.map((session) => {
+      const partner =
+        session.user1Id === userId ? session.user2 : session.user1;
+      const lastMessage = session.messages[0];
+      const isOnline = onlineUsers.includes(partner.id.toString());
+
+      // Use Redis timestamp, or fallback to DB updatedAt
+      const lastSeen = isOnline
+        ? null
+        : lastSeenMap[partner.id] || partner.updatedAt.toISOString();
+
+      return {
+        // Standardized DTO payload
+        id: session.id,
+        partnerId: partner.id,
+        partnerName: partner.name,
+        partnerRole: partner.role,
+        partnerImage: partner.profilePicture,
+
+        lastMessage: lastMessage
+          ? lastMessage.text || "📷 Фотография"
+          : "Нет сообщений",
+        lastMessageTime: lastMessage
+          ? lastMessage.createdAt.toISOString()
+          : session.createdAt.toISOString(),
+        unreadCount: session._count.messages,
+
+        isOnline: isOnline,
+        lastSeen: lastSeen,
+      };
+    });
+
+    res.status(200).json(formattedSessions);
   } catch (error) {
-    res.status(500).json({ message: "Failed to fetch inbox" });
+    console.error("Error fetching sessions:", error);
+    res.status(500).json({ message: "Failed to fetch chat sessions" });
   }
 });
 
 // ==========================================
-// 3. CREATE OR GET CHAT
-// POST /api/chats
+// 2. GET CHAT HISTORY BETWEEN TWO USERS
+// GET /api/chats/history?userId2=abc&cursor=xyz
 // ==========================================
-router.post("/", verifyAuth, async (req, res) => {
+router.get("/history", verifyAuth, async (req, res) => {
+  const userId1 = req.user?.id; // Current authenticated user
+  const { userId2, cursor, limit = "20" } = req.query;
+  const takeLimit = parseInt(limit);
+
+  if (!userId1 || !userId2) {
+    return res.status(400).json({ message: "userId1 and userId2 required" });
+  }
+
   try {
-    const currentUserId = req.user.id;
-    const { participantId } = req.body;
+    const [user1Id, user2Id] = [userId1, userId2].sort();
 
-    if (!participantId)
-      return res.status(400).json({ message: "Participant ID required" });
+    const session = await prisma.chatSession.findUnique({
+      where: { user1Id_user2Id: { user1Id, user2Id } },
+    });
 
-    // Prevent chatting with yourself
-    if (currentUserId === participantId) {
-      return res.status(400).json({ message: "Cannot chat with yourself" });
-    }
+    if (!session) return res.status(200).json([]);
 
-    let chat = await prisma.chat.findFirst({
-      where: {
-        AND: [
-          { participants: { some: { id: currentUserId } } },
-          { participants: { some: { id: participantId } } },
-        ],
-      },
+    const messages = await prisma.chatMessage.findMany({
+      where: { chatSessionId: session.id },
+      take: takeLimit,
+      skip: cursor && cursor !== "" ? 1 : 0,
+      cursor: cursor && cursor !== "" ? { id: cursor } : undefined,
+      orderBy: { createdAt: "desc" }, // Fetch newest first for pagination
       include: {
-        participants: {
-          select: { id: true, name: true, profile_picture: true },
+        replyTo: {
+          select: { id: true, text: true, imageUrl: true, senderId: true },
         },
       },
     });
 
-    if (!chat) {
-      chat = await prisma.chat.create({
-        data: {
-          participants: {
-            connect: [{ id: currentUserId }, { id: participantId }],
-          },
-        },
-        include: {
-          participants: {
-            select: { id: true, name: true, profile_picture: true },
-          },
-        },
-      });
-    }
-
-    res.status(200).json(chat);
+    // IMPORTANT: React Query/Frontend expects chronological order
+    // Reverse the array so the oldest message in the batch is at index 0
+    res.status(200).json(messages.reverse());
   } catch (error) {
-    res.status(500).json({ message: "Failed to init chat" });
+    console.error("Error fetching chat history:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
 // ==========================================
-// 4. GET CHAT MESSAGES
-// GET /api/chats/:chatId/messages
+// 3. GET TOTAL UNREAD COUNT (For Navbar Badge)
+// GET /api/chats/unread-count
 // ==========================================
-router.get("/:chatId/messages", verifyAuth, async (req, res) => {
+router.get("/unread-count", verifyAuth, async (req, res) => {
+  const userId = req.user.id;
+
   try {
-    const { chatId } = req.params;
-
-    // SECURITY CHECK: Ensure user is a participant of this chat
-    const chat = await prisma.chat.findFirst({
-      where: { id: chatId, participants: { some: { id: req.user.id } } },
-    });
-    if (!chat) return res.status(403).json({ message: "Access denied" });
-
-    const messages = await prisma.message.findMany({
-      where: { chatId },
-      orderBy: { createdAt: "asc" },
-      include: { sender: { select: { id: true, name: true } } },
-    });
-    res.status(200).json(messages);
-  } catch (error) {
-    res.status(500).json({ message: "Error loading messages" });
-  }
-});
-
-// ==========================================
-// 5. SEND MESSAGE & TRIGGER REDIS
-// POST /api/chats/:chatId/messages
-// ==========================================
-router.post("/:chatId/messages", verifyAuth, async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const { content } = req.body;
-    const senderId = req.user.id;
-
-    // SECURITY CHECK: Verify chat exists AND user is in it, while getting participants
-    const chatExists = await prisma.chat.findFirst({
-      where: { id: chatId, participants: { some: { id: senderId } } },
-      include: { participants: true },
-    });
-
-    if (!chatExists)
-      return res
-        .status(403)
-        .json({ message: "Access denied or chat not found" });
-
-    const newMessage = await prisma.message.create({
-      data: { content, chatId, senderId },
-      include: {
-        sender: { select: { id: true, name: true, profile_picture: true } },
-      },
-    });
-
-    // Update chat timestamp to bubble it to the top of the inbox
-    await prisma.chat.update({
-      where: { id: chatId },
-      data: { updatedAt: new Date() },
-    });
-
-    // Publish event
-    const receiver = chatExists.participants.find((p) => p.id !== senderId);
-    if (receiver) {
-      await publishEvent("NEW_MESSAGE", {
-        message: newMessage,
-        chatId: chatId,
-        receiverId: receiver.id,
-      });
-    }
-
-    res.status(201).json(newMessage);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error sending message" });
-  }
-});
-
-// ==========================================
-// 6. MARK AS READ
-// PATCH /api/chats/:chatId/read
-// ==========================================
-router.patch("/:chatId/read", verifyAuth, async (req, res) => {
-  try {
-    const { chatId } = req.params;
-
-    // SECURITY CHECK: Ensure user is a participant of this chat
-    const chat = await prisma.chat.findFirst({
-      where: { id: chatId, participants: { some: { id: req.user.id } } },
-    });
-    if (!chat) return res.status(403).json({ message: "Access denied" });
-
-    await prisma.message.updateMany({
+    const unreadCount = await prisma.chatMessage.count({
       where: {
-        chatId: chatId,
-        senderId: { not: req.user.id },
+        session: {
+          OR: [{ user1Id: userId }, { user2Id: userId }],
+        },
+        senderId: { not: userId },
         isRead: false,
       },
-      data: { isRead: true },
     });
-    res.status(200).json({ success: true });
+
+    res.status(200).json({ totalUnread: unreadCount });
   } catch (error) {
-    res.status(500).json({ message: "Error updating read status" });
+    console.error("Error fetching unread count:", error);
+    res.status(500).json({ message: "Error fetching unread count" });
+  }
+});
+
+// ==========================================
+// 4. MARK MESSAGES AS READ (REST API Fallback)
+// PATCH /api/chats/mark-read
+// ==========================================
+router.patch("/mark-read", verifyAuth, async (req, res) => {
+  const currentUserId = req.user.id;
+  const { partnerId } = req.body;
+
+  if (!partnerId) {
+    return res.status(400).json({ message: "partnerId is required" });
+  }
+
+  try {
+    const [user1Id, user2Id] = [currentUserId, partnerId].sort();
+
+    const session = await prisma.chatSession.findUnique({
+      where: { user1Id_user2Id: { user1Id, user2Id } },
+    });
+
+    if (!session) return res.status(404).json({ message: "Session not found" });
+
+    await prisma.chatMessage.updateMany({
+      where: {
+        chatSessionId: session.id,
+        senderId: partnerId, // The person who sent the messages
+        isRead: false,
+      },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    });
+
+    res.status(200).json({ success: true, message: "Marked as read" });
+  } catch (error) {
+    console.error("Error marking read:", error);
+    res.status(500).json({ message: "Failed to mark chat as read" });
+  }
+});
+
+// ==========================================
+// 5. UPLOAD CHAT IMAGE TO MINIO
+// POST /api/chats/upload
+// ==========================================
+router.post("/upload", verifyAuth, upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No valid image uploaded." });
+    }
+
+    const { buffer, originalname } = req.file;
+
+    // Utilize the existing optimizeAndUpload pipeline
+    const { fileName } = await optimizeAndUpload(
+      buffer,
+      originalname,
+      "chats", // folder/prefix
+    );
+
+    // Generate the public URL format based on your MinIO setup
+    const fullUrl = `${MINIO_PUBLIC_URL}/${MINIO_BUCKET_NAME}/chats/${fileName}`;
+
+    res.status(200).json({
+      success: true,
+      url: fullUrl,
+      fileName: fileName,
+    });
+  } catch (error) {
+    console.error("Upload route error:", error);
+    res
+      .status(500)
+      .json({ message: "Internal server error during image upload." });
+  }
+});
+
+// Added Multer Error Handler
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
+  } else if (err) {
+    return res.status(400).json({ message: err.message });
+  }
+  next();
+});
+
+// ==========================================
+// 6. GET ONLINE USERS
+// GET /api/chats/online
+// ==========================================
+router.get("/online", async (req, res) => {
+  try {
+    const onlineUsers = await redis.smembers("online_users");
+    res.json(onlineUsers);
+  } catch (error) {
+    res.json([]);
+  }
+});
+
+// ==========================================
+// 7. CREATE OR GET CHAT (Helper for initiating new chats)
+// POST /api/chats/init
+// ==========================================
+router.post("/init", verifyAuth, async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+    const { partnerId } = req.body;
+
+    if (!partnerId)
+      return res.status(400).json({ message: "partnerId required" });
+    if (currentUserId === partnerId)
+      return res.status(400).json({ message: "Cannot chat with yourself" });
+
+    const [user1Id, user2Id] = [currentUserId, partnerId].sort();
+
+    const session = await prisma.chatSession.upsert({
+      where: { user1Id_user2Id: { user1Id, user2Id } },
+      update: {}, // Just fetch it if it exists
+      create: { user1Id, user2Id, status: "OPEN" },
+    });
+
+    res.status(200).json({ chatId: session.id, partnerId });
+  } catch (error) {
+    console.error("Init chat error:", error);
+    res.status(500).json({ message: "Failed to init chat" });
   }
 });
 

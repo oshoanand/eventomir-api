@@ -23,7 +23,7 @@ export const getEffectiveFeatures = async (userId) => {
   const sub = user?.subscription;
 
   // 🚨 STRICT EXPIRATION CHECK (Backend JIT Guard)
-  if (sub && sub.isActive) {
+  if (sub && sub.isActive && sub.plan) {
     // If the user is on a paid plan with an expiration date that has ALREADY PASSED
     if (
       sub.plan.tier !== "FREE" &&
@@ -37,14 +37,29 @@ export const getEffectiveFeatures = async (userId) => {
     }
 
     // They have a valid active subscription (either FREE, or an unexpired PAID plan)
-    // Ensure we safely parse the JSON features object
-    const planFeatures =
-      typeof sub.plan.features === "object" && sub.plan.features !== null
-        ? sub.plan.features
-        : {};
+    const rawFeatures = sub.plan.features;
+    const normalizedFeatures = {};
 
-    // Merge plan features with defaults in case a new feature was added to the DB later
-    return { ...DEFAULT_FREE_FEATURES, ...planFeatures };
+    // 🚨 ROBUST FIX: Extract the actual 'value' from the new rich JSON objects
+    if (typeof rawFeatures === "object" && rawFeatures !== null) {
+      for (const [key, data] of Object.entries(rawFeatures)) {
+        // Check if the feature is saved as the new rich object format { key, label, type, value }
+        if (
+          data &&
+          typeof data === "object" &&
+          !Array.isArray(data) &&
+          data.value !== undefined
+        ) {
+          normalizedFeatures[key] = data.value;
+        } else {
+          // Fallback for legacy flat data (e.g., maxPhotoUpload: 10)
+          normalizedFeatures[key] = data;
+        }
+      }
+    }
+
+    // Merge normalized plan features with defaults to fill any missing gaps
+    return { ...DEFAULT_FREE_FEATURES, ...normalizedFeatures };
   }
 
   // Fallback if user has no subscription or it was set to inactive
@@ -55,6 +70,11 @@ export const getEffectiveFeatures = async (userId) => {
 export const requireFeature = (featureKey, getUsageCount = null) => {
   return async (req, res, next) => {
     try {
+      // Ensure req.user exists (Safety check)
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Не авторизован." });
+      }
+
       const features = await getEffectiveFeatures(req.user.id);
       const limit = features[featureKey];
 
@@ -81,16 +101,17 @@ export const requireFeature = (featureKey, getUsageCount = null) => {
         if (limit <= 0) {
           return res.status(403).json({
             error:
-              "Вы исчерпали лимит для этой функции. Пожалуйста, улучшите тариф.",
+              "Эта функция недоступна на вашем текущем тарифе. Пожалуйста, улучшите тариф.",
           });
         }
 
         // If we provided a callback to check the database for their current usage count
         if (getUsageCount) {
           const currentUsage = await getUsageCount(req.user.id);
+
           if (currentUsage >= limit) {
             return res.status(403).json({
-              error: `Достигнут лимит (${limit}). Пожалуйста, улучшите тариф.`,
+              error: `Достигнут лимит (${limit}). Пожалуйста, улучшите тариф для расширения лимита.`,
             });
           }
         }
@@ -98,7 +119,7 @@ export const requireFeature = (featureKey, getUsageCount = null) => {
         return next();
       }
 
-      // If it passes all checks, allow the user to proceed to the controller
+      // If it passes all checks (or is a string-based feature), allow the user to proceed
       next();
     } catch (error) {
       console.error("[Feature Guard Error]:", error);

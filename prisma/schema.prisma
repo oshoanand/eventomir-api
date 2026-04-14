@@ -20,7 +20,6 @@ enum NotificationType {
   NEW_MESSAGE
   ADMIN_ALERT
 
-  // Booking related
   NEW_BOOKING
   BOOKING_REQUEST
   BOOKING_UPDATE
@@ -160,8 +159,6 @@ model User {
   certificates           Certificate[]
   recommendation_letters RecommendationLetter[]
   prompts                Prompt[]
-  chats                  Chat[]                 @relation("ChatParticipants")
-  messages               Message[]
   notifications          Notification[]
   subscription           UserSubscription?
   payments               Payment[]
@@ -169,6 +166,8 @@ model User {
   accounts           Account[]
   sessions           Session[]
   verificationTokens VerificationToken[]
+
+  audio_tracks AudioTrack[]
 
   parentAgencyId String?
   parentAgency   User?   @relation("AgencySpecialists", fields: [parentAgencyId], references: [id])
@@ -181,6 +180,11 @@ model User {
 
   walletBalance      Float               @default(0)
   walletTransactions WalletTransaction[]
+
+  // Relations for the universal chat
+  chatsAsUser1 ChatSession[] @relation("ChatUser1")
+  chatsAsUser2 ChatSession[] @relation("ChatUser2")
+  messagesSent ChatMessage[]
 }
 
 model Account {
@@ -261,7 +265,7 @@ model Booking {
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  Payment   Payment[]
+  payments  Payment[]
 }
 
 model PaidRequest {
@@ -344,27 +348,42 @@ model RecommendationLetter {
 // COMMUNICATION & SUPPORT MODELS
 // ==========================================
 
-model Chat {
-  id        String   @id @default(cuid())
+model ChatSession {
+  id String @id @default(cuid())
+
+  user1Id String
+  user1   User   @relation("ChatUser1", fields: [user1Id], references: [id])
+
+  user2Id String
+  user2   User   @relation("ChatUser2", fields: [user2Id], references: [id])
+
+  status   String        @default("OPEN")
+  messages ChatMessage[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  participants    User[]          @relation("ChatParticipants")
-  messages        Message[]
-  support_request SupportRequest?
+  supportRequest SupportRequest?
+
+  @@unique([user1Id, user2Id])
 }
 
-model Message {
-  id        String   @id @default(cuid())
-  content   String   @db.Text
-  createdAt DateTime @default(now())
-  isRead    Boolean  @default(false)
+model ChatMessage {
+  id            String    @id @default(cuid())
+  chatSessionId String
+  senderId      String
+  text          String?   @db.Text
+  imageUrl      String?
+  isRead        Boolean   @default(false)
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
 
-  chatId String
-  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  replyToId String?
+  replyTo   ChatMessage?  @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies   ChatMessage[] @relation("MessageReplies")
 
-  senderId String?
-  sender   User?   @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  session ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  sender  User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
 
 model SupportRequest {
@@ -377,9 +396,9 @@ model SupportRequest {
   created_at          DateTime  @default(now())
   closed_at           DateTime?
 
-  requester        User  @relation("RequesterSupport", fields: [requester_id], references: [id], onDelete: Cascade)
-  chat             Chat  @relation(fields: [chat_id], references: [id], onDelete: Cascade)
-  assigned_manager User? @relation("ManagerSupport", fields: [assigned_manager_id], references: [id], onDelete: SetNull)
+  requester        User        @relation("RequesterSupport", fields: [requester_id], references: [id], onDelete: Cascade)
+  chat             ChatSession @relation(fields: [chat_id], references: [id], onDelete: Cascade)
+  assigned_manager User?       @relation("ManagerSupport", fields: [assigned_manager_id], references: [id], onDelete: SetNull)
 }
 
 model Notification {
@@ -411,10 +430,12 @@ model Payment {
   providerTxId String?
   metadata     Json?
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  booking     Booking?     @relation(fields: [bookingId], references: [id])
-  bookingId   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+  bookingId String?
+
   paidRequest PaidRequest?
 }
 
@@ -495,9 +516,9 @@ model Order {
   status        OrderStatus @default(INITIATED)
   paymentId     String?
   paymentMethod String      @default("card")
-  ticketCode    String      @unique @default(uuid()) // The unique string embedded in the QR Code
-  isUsed        Boolean     @default(false) // Has the attendee scanned into the event?
-  enteredAt     DateTime? // The exact timestamp they entered
+  ticketCode    String      @unique @default(uuid()) // Embedded in the QR Code
+  isUsed        Boolean     @default(false) // Has the attendee scanned in?
+  enteredAt     DateTime? // Exact timestamp they entered
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -591,7 +612,7 @@ model WalletTransaction {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  amount      Float // Use negative numbers for payments, positive for top-ups
+  amount      Float // Negative for payments, positive for top-ups
   type        WalletType // "PAYMENT", "TOPUP", "REFUND", "PAYOUT"
   description String     @db.Text
 
@@ -630,7 +651,7 @@ model PartnershipRequest {
 
 model Partner {
   id                   String  @id @default(uuid())
-  referralId           String  @unique // This acts as your affiliate link code
+  referralId           String  @unique // Affiliate link code
   balance              Float   @default(0)
   totalEarned          Float   @default(0)
   totalRegistrations   Int     @default(0)
@@ -675,4 +696,14 @@ model PayoutRequest {
   updated_at      DateTime     @updatedAt
 
   partner Partner @relation(fields: [partner_id], references: [id], onDelete: Cascade)
+}
+
+model AudioTrack {
+  id           String   @id @default(cuid())
+  performer_id String
+  title        String
+  file_url     String
+  created_at   DateTime @default(now())
+
+  performer User @relation(fields: [performer_id], references: [id], onDelete: Cascade)
 }

@@ -315,4 +315,46 @@ router.delete(
   },
 );
 
+// ==========================================
+// GET BASIC USER INFO (For Chat Headers, etc.)
+// GET /api/users/:id
+// ==========================================
+router.get("/:id", verifyAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    // Fetch only safe, public-facing fields using Prisma 'select'
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        profile_picture: true,
+        image: true,
+        role: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Send back the data. We check both profile_picture and image
+    // depending on how they registered (OAuth vs Email)
+    res.status(200).json({
+      id: user.id,
+      name: user.name || "Пользователь",
+      profilePicture: user.profile_picture || user.image || null,
+      role: user.role,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching user info:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 export default router;

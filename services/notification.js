@@ -1,6 +1,6 @@
 import prisma from "../libs/prisma.js";
 import { sendPushNotification } from "../libs/firebase.js";
-import { sendNotification as sendSocketNotification } from "../libs/socket.js";
+import { getIO, sendSystemNotification } from "../libs/socket.js";
 
 /**
  * Helper to normalize a phone number into a Firebase Topic.
@@ -30,7 +30,7 @@ export const notifyUser = async ({
   data,
   saveToDb = true,
 }) => {
-  // 🚨 FIX 1: Define `target` and `currentTargetType` at the top scope so the catch block can see it
+  // Define target trackers for the catch block
   let target = userId;
   let currentTargetType = "token";
 
@@ -49,14 +49,20 @@ export const notifyUser = async ({
     }
 
     // 2. Emit Real-Time Socket Event (Instant delivery for active users)
-    await sendSocketNotification(userId, type, body, { title, ...data });
+    try {
+      const io = getIO();
+      sendSystemNotification(io, userId, type, body, { title, ...data });
+    } catch (socketError) {
+      console.warn("⚠️ Socket.io notification skipped:", socketError.message);
+    }
 
+    // 3. Fetch user details for Push Notifications
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { phone: true, fcmToken: true },
     });
 
-    if (!user) return;
+    if (!user) return false;
 
     // 4. Determine Delivery Method (Topic vs Token)
     const topicName = getUserTopic(user.phone);
@@ -71,9 +77,7 @@ export const notifyUser = async ({
         title,
         body,
         topicName,
-        {
-          url: data?.url || "/",
-        },
+        { url: data?.url || "/" },
       );
 
       await prisma.notificationLog.create({
@@ -81,13 +85,14 @@ export const notifyUser = async ({
           title,
           body,
           targetType: "topic",
-          target: target, // Now correctly defined
+          target: target,
           status: "SUCCESS",
           messageId: response,
         },
       });
 
       console.log(`✅ FCM Sent via Topic: ${topicName}`);
+      return true;
     } else if (user.fcmToken) {
       // 🔄 SCENARIO B: Fallback to Token-Based Delivery
       target = user.fcmToken;
@@ -108,7 +113,7 @@ export const notifyUser = async ({
           title,
           body,
           targetType: "token",
-          target: target, // Now correctly defined
+          target: target,
           status: "SUCCESS",
           messageId: fcmResponse,
         },
@@ -122,7 +127,6 @@ export const notifyUser = async ({
           (resp.error.code === "messaging/invalid-registration-token" ||
             resp.error.code === "messaging/registration-token-not-registered")
         ) {
-          // Nullify the dead token so we don't try sending to it again
           await prisma.user.update({
             where: { id: userId },
             data: { fcmToken: null },
@@ -130,29 +134,28 @@ export const notifyUser = async ({
           console.log(`🗑️ Cleaned up dead FCM token for user ${userId}.`);
         }
       }
+      return true;
     }
   } catch (error) {
     console.error("❌ Notification Dispatcher Error:", error);
 
-    // 3. ✅ Log Failure to PostgreSQL
+    // Log Failure to PostgreSQL
     try {
       await prisma.notificationLog.create({
         data: {
           title,
           body,
-          targetType: currentTargetType, // 🚨 FIX 3: Passed proper TargetType enum, not the notification 'type'
+          targetType: currentTargetType,
           target: target,
           status: "FAILED",
           errorDetails: error.message,
         },
       });
     } catch (logError) {
-      console.error("Failed to write error log to DB:", logError);
+      console.error("Failed to write notification error log to DB:", logError);
     }
 
-    // 🚨 FIX 2: Removed `res.status(500)` because `res` is not available in a utility function.
-    // Returning false lets the calling route (like /register-performer) finish successfully
-    // even if the notification push fails.
+    // Fail gracefully so the calling route (like /register-performer) can finish
     return false;
   }
 };

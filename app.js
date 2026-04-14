@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 // Services & Utils
-import { initSocket } from "./libs/socket.js";
+import { initializeSocket } from "./libs/socket.js";
 import { initializeMinio } from "./utils/minioClient.js";
 import { connectRedis } from "./libs/redis.js";
 
@@ -58,7 +58,7 @@ async function initializeExpressServer() {
   ].filter(Boolean); // Removes undefined/null if env vars are missing
 
   // 2. Initialize Socket.io securely by passing the allowed domains
-  initSocket(server, allowedDomains);
+  initializeSocket(server, allowedDomains);
 
   // 3. Express CORS Setup (Must be before routes)
   app.use(
