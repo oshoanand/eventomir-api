@@ -12,7 +12,7 @@ export const startSubscriptionCron = () => {
       // 1. Find all active subscriptions that have passed their end date
       const expiredSubscriptions = await prisma.userSubscription.findMany({
         where: {
-          isActive: true,
+          status: "ACTIVE", // 🚨 FIX 1: Updated from 'isActive: true' to match new schema
           endDate: { lt: now },
           plan: { tier: { not: "FREE" } }, // Don't downgrade people already on FREE
         },
@@ -25,7 +25,8 @@ export const startSubscriptionCron = () => {
       }
 
       // 2. Fetch the FREE plan fallback
-      const freePlan = await prisma.subscriptionPlan.findUnique({
+      // 🚨 FIX 2: Used findFirst instead of findUnique in case 'tier' is not a @unique constraint
+      const freePlan = await prisma.subscriptionPlan.findFirst({
         where: { tier: "FREE" },
       });
 
@@ -42,11 +43,13 @@ export const startSubscriptionCron = () => {
           data: {
             planId: freePlan.id,
             endDate: null, // Free plans don't expire
+            status: "ACTIVE", // Ensure status remains ACTIVE for the new free plan
+            pricePaid: 0, // 🚨 FIX 3: Reset the price paid for the free tier
             autoRenew: false,
           },
         });
 
-        // Optional: Log this to your notification system so the user knows
+        // Notify the user
         await prisma.notification.create({
           data: {
             userId: sub.userId,

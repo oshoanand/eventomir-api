@@ -191,11 +191,9 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
           data: { status: "FAILED" },
         }),
       ]);
-      return res
-        .status(502)
-        .json({
-          message: "Сервис оплаты временно недоступен. Попробуйте позже.",
-        });
+      return res.status(502).json({
+        message: "Сервис оплаты временно недоступен. Попробуйте позже.",
+      });
     }
   } catch (error) {
     const errorMap = {
@@ -272,6 +270,156 @@ router.post("/", verifyAuth, async (req, res) => {
     res.status(201).json(newEvent);
   } catch (error) {
     res.status(400).json({ message: "Invalid event data" });
+  }
+});
+
+// --- UPDATE EVENT ---
+router.put("/:id", verifyAuth, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const data = req.body;
+
+    // 1. Check if event exists
+    const existingEvent = await prisma.event.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!existingEvent) {
+      return res.status(404).json({ message: "Событие не найдено" });
+    }
+
+    // 2. Authorization Check (Only the host or an admin can edit)
+    if (
+      existingEvent.hostId !== req.user.id &&
+      req.user.role !== "administrator"
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Нет прав для редактирования этого события" });
+    }
+
+    // 3. Prepare clean update data
+    const updateData = { ...data };
+
+    // Format numbers and dates
+    if (data.price !== undefined)
+      updateData.price = parseFloat(data.price) || 0;
+    if (data.discountPrice !== undefined)
+      updateData.discountPrice = parseFloat(data.discountPrice) || 0;
+    if (data.date !== undefined) updateData.date = new Date(data.date);
+
+    // Safely recalculate available tickets if the total capacity changes
+    if (data.totalTickets !== undefined) {
+      const newTotal = parseInt(data.totalTickets) || 0;
+      const difference = newTotal - existingEvent.totalTickets;
+
+      updateData.totalTickets = newTotal;
+      // Prevent available tickets from dropping below 0
+      updateData.availableTickets = Math.max(
+        0,
+        existingEvent.availableTickets + difference,
+      );
+    }
+
+    // Prevent non-admins from transferring ownership
+    if (data.hostId && req.user.role !== "performer") {
+      delete updateData.hostId;
+    }
+
+    // 4. Execute update
+    const updatedEvent = await prisma.event.update({
+      where: { id: eventId },
+      data: updateData,
+    });
+
+    // 5. Invalidate relevant caches
+    await invalidateKeys(["events:all", `events:${eventId}`, "events:hosted"]);
+
+    res.status(200).json(updatedEvent);
+  } catch (error) {
+    console.error("Update Event Error:", error);
+    res.status(400).json({ message: "Ошибка при обновлении события" });
+  }
+});
+
+// --- DELETE EVENT ---
+router.delete("/:id", verifyAuth, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    // 1. Find the event
+    const existingEvent = await prisma.event.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!existingEvent) {
+      return res.status(404).json({ message: "Событие не найдено" });
+    }
+
+    // 2. Authorization Check
+    if (
+      existingEvent.hostId !== req.user.id &&
+      req.user.role !== "administrator"
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Нет прав для удаления этого события" });
+    }
+
+    // --- 🚨 NEW SAFETY CHECKS ---
+    if (req.user.role !== "administrator") {
+      // Check 1: Have people bought tickets?
+      const soldTicketsCount = await prisma.order.count({
+        where: {
+          eventId: eventId,
+          status: "ACTIVE", // Or "PAYMENT_SUCCESS" depending on your exact schema
+        },
+      });
+
+      if (soldTicketsCount > 0) {
+        return res.status(400).json({
+          message:
+            "Нельзя удалить событие: уже есть купленные билеты. Измените статус на 'Отменено', чтобы оформить возвраты.",
+        });
+      }
+
+      // Check 2: Have people RSVP'd to a free event?
+      const rsvpCount = await prisma.invitation.count({
+        where: {
+          eventId: eventId,
+          status: "ACCEPTED",
+        },
+      });
+
+      if (rsvpCount > 0) {
+        return res.status(400).json({
+          message:
+            "Нельзя удалить событие: уже есть зарегистрированные участники.",
+        });
+      }
+
+      // Check 3: Has the event already happened?
+      if (new Date(existingEvent.date) < new Date()) {
+        return res.status(400).json({
+          message:
+            "Нельзя удалить прошедшее событие. Оно сохраняется для истории.",
+        });
+      }
+    }
+    // ----------------------------
+
+    // 3. Execute Deletion
+    await prisma.event.delete({
+      where: { id: eventId },
+    });
+
+    // 4. Clear Cache
+    await invalidateKeys(["events:all", `events:${eventId}`, "events:hosted"]);
+
+    res.status(200).json({ message: "Событие успешно удалено" });
+  } catch (error) {
+    console.error("Delete Event Error:", error);
+    res.status(500).json({ message: "Ошибка при удалении события" });
   }
 });
 
