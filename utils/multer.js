@@ -18,7 +18,7 @@ export const createUploader = (maxSizeMB = 5) => {
       "image/png",
       "image/webp",
       "image/gif",
-      "application/pdf", // 🚨 Added PDF support here
+      "application/pdf",
     ];
 
     if (allowedMimeTypes.includes(file.mimetype)) {

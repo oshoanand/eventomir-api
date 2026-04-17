@@ -3,91 +3,158 @@ import QRCode from "qrcode";
 
 /**
  * Generates a PDF ticket in memory and returns it as a Buffer.
+ * Supports both 'Order' (Paid) and 'Invitation' (Free) objects.
  */
-export const generateTicketPDF = (order, event, user) => {
-  // Added 'async' to the Promise callback to handle the QR generation
+export const generateTicketPDF = async (order, event, user) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // Create a document
       const doc = new PDFDocument({ size: "A4", margin: 50 });
       const buffers = [];
 
-      // Collect data chunks as they are generated
-      doc.on("data", buffers.push.bind(buffers));
+      doc.on("data", (chunk) => buffers.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(buffers)));
+      doc.on("error", (err) => reject(err));
 
-      // When the PDF is done, concatenate chunks into a single Buffer
-      doc.on("end", () => {
-        const pdfData = Buffer.concat(buffers);
-        resolve(pdfData);
-      });
+      // --- DATA PREPARATION ---
+      // Handle both Order (ticketCode) and Invitation (ticketToken)
+      const secretToken = order.ticketCode || order.ticketToken || order.id;
+      const ticketCount = order.ticketCount || 1;
+      const priceText = order.totalPrice
+        ? `${order.totalPrice} RUB`
+        : "FREE (RSVP)";
+
+      // Ensure date is a valid Date object
+      const eventDate = new Date(event.date);
+      const formattedDate = isNaN(eventDate.getTime())
+        ? "Date TBA"
+        : eventDate.toLocaleDateString("ru-RU");
 
       // --- TICKET DESIGN ---
 
-      // Header
+      // Logo/Header
       doc
-        .fontSize(25)
-        .fillColor("#E11D48")
-        .text("Eventomir Ticket", { align: "center" });
-      doc.moveDown();
+        .fillColor("#2563EB")
+        .fontSize(28)
+        .font("Helvetica-Bold")
+        .text("Eventomir", { align: "center" });
 
-      // Event Info
       doc
-        .fontSize(20)
+        .fontSize(10)
+        .fillColor("#6B7280")
+        .text("app.eventomir.ru", { align: "center" });
+
+      doc.moveDown(2);
+
+      // Event Title
+      doc
         .fillColor("#000000")
+        .fontSize(22)
+        .font("Helvetica-Bold")
         .text(event.title, { align: "center" });
-      doc.moveDown(0.5);
 
-      doc.fontSize(14).fillColor("#4B5563");
-      doc.text(
-        `Date: ${event.date.toLocaleDateString()} ${event.time ? `at ${event.time}` : ""}`,
-      );
-      doc.text(`Location: ${event.city}, ${event.address || "TBA"}`);
-      doc.moveDown();
-
-      // Order Info Box Coordinates
-      const boxY = doc.y;
-      doc.rect(50, boxY, 495, 120).stroke("#E5E7EB"); // Increased height slightly to fit QR nicely
       doc.moveDown(1);
 
-      // Text inside the box (Left Side)
-      doc.fontSize(12).fillColor("#000000");
-      doc.text(`Order ID: ${order.id}`, 65);
-      doc.text(`Ticket Holder: ${user.name}`, 65);
-      doc.text(`Number of Tickets: ${order.ticketCount}`, 65);
-      doc.text(`Total Price: ${order.totalPrice} RUB`, 65);
-      doc.text(`Ticket Code: ${order.ticketCode.split("-")[0]}...`, 65); // Short visual hash
+      // Info Section
+      doc.font("Helvetica").fontSize(12).fillColor("#4B5563");
+      doc.text(
+        `Date: ${formattedDate} ${event.time ? `at ${event.time}` : ""}`,
+        { align: "center" },
+      );
+      doc.text(
+        `Location: ${event.city}${event.address ? `, ${event.address}` : ""}`,
+        { align: "center" },
+      );
 
-      // --- 🚀 NEW: GENERATE & EMBED QR CODE ---
-      // We generate the QR code as a raw PNG buffer
-      const qrBuffer = await QRCode.toBuffer(order.ticketCode, {
-        errorCorrectionLevel: "H", // High error correction so it scans easily even if printed poorly
+      doc.moveDown(2);
+
+      // --- TICKET BOX ---
+      const boxTop = doc.y;
+      const boxHeight = 130;
+
+      // Draw Box Background
+      doc
+        .roundedRect(50, boxTop, 495, boxHeight, 10)
+        .fillAndStroke("#F9FAFB", "#E5E7EB");
+
+      // Text inside box
+      doc.fillColor("#000000");
+
+      // Left Column
+      const textX = 70;
+      const textY = boxTop + 20;
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text("TICKET HOLDER", textX, textY);
+      doc
+        .font("Helvetica")
+        .fontSize(12)
+        .text(user.name || "Guest", textX, textY + 15);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text("ORDER ID", textX, textY + 45);
+      doc
+        .font("Helvetica")
+        .fontSize(11)
+        .text(`#${order.id.slice(0, 8).toUpperCase()}`, textX, textY + 60);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text("QUANTITY", textX + 180, textY + 45);
+      doc
+        .font("Helvetica")
+        .fontSize(11)
+        .text(`${ticketCount} Ticket(s)`, textX + 180, textY + 60);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text("PRICE", textX, textY + 85);
+      doc
+        .font("Helvetica")
+        .fontSize(11)
+        .text(priceText, textX, textY + 100);
+
+      // --- QR CODE ---
+      // Generate QR
+      const qrBuffer = await QRCode.toBuffer(secretToken, {
+        errorCorrectionLevel: "H",
         margin: 1,
-        width: 100, // 100x100 pixels
+        color: {
+          dark: "#000000",
+          light: "#F9FAFB", // Match box background
+        },
       });
 
-      // Place the QR code on the right side of the box
-      doc.image(qrBuffer, 430, boxY + 10, { width: 100 });
-
-      // Move cursor below the box
-      doc.y = boxY + 135;
+      // Embed QR (Right aligned in box)
+      doc.image(qrBuffer, 430, boxTop + 15, { width: 100 });
 
       // Footer
+      doc.moveDown(8);
       doc
         .fontSize(10)
         .fillColor("#9CA3AF")
+        .font("Helvetica-Oblique")
         .text(
-          "Please present this ticket (digital or printed) at the entrance.",
-          { align: "center" },
+          "This ticket is unique. Please show the QR code at the entrance.",
+          {
+            align: "center",
+            width: 400,
+          },
         );
 
-      // Finalize the PDF
+      // Finalize
       doc.end();
     } catch (error) {
+      console.error("PDF Generation Error:", error);
       reject(error);
     }
   });
 };
-
 /**
  * Generates a PDF Receipt/Invoice for Subscription Purchases.
  */

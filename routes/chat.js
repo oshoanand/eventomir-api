@@ -2,7 +2,7 @@ import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { redis } from "../libs/redis.js";
-import multer from "multer";
+import { createUploader } from "../utils/multer.js";
 
 // Image Upload Imports
 import {
@@ -11,21 +11,9 @@ import {
   MINIO_PUBLIC_URL,
 } from "../utils/minioClient.js";
 import { optimizeAndUpload } from "../utils/imageProcessor.js";
+const chatPhotoUploader = createUploader(10); // 10MB limit
 
 const router = Router();
-
-// Configure multer to store files in memory for processing before MinIO upload
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only image files are allowed!"), false);
-    }
-  },
-});
 
 // ==========================================
 // 1. GET ALL CHAT SESSIONS (Universal Inbox)
@@ -52,18 +40,18 @@ router.get("/sessions", verifyAuth, async (req, res) => {
           select: {
             id: true,
             name: true,
-            profilePicture: true,
+            profile_picture: true,
             role: true,
-            updatedAt: true,
+            updated_at: true,
           },
         },
         user2: {
           select: {
             id: true,
             name: true,
-            profilePicture: true,
+            profile_picture: true,
             role: true,
-            updatedAt: true,
+            updated_at: true,
           },
         },
         messages: {
@@ -248,46 +236,47 @@ router.patch("/mark-read", verifyAuth, async (req, res) => {
 // 5. UPLOAD CHAT IMAGE TO MINIO
 // POST /api/chats/upload
 // ==========================================
-router.post("/upload", verifyAuth, upload.single("image"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No valid image uploaded." });
+router.post(
+  "/upload",
+  verifyAuth,
+  chatPhotoUploader.single("image"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No valid image uploaded." });
+      }
+
+      // 1. Utilize the unified optimizeAndUpload pipeline
+      // 1200px is great for chat images (maintains detail while compressing heavily via WebP)
+      const fullUrl = await optimizeAndUpload(
+        req.file,
+        "chats", // baseFolder
+        req.user.id, // dynamicId
+        1200, // width
+      );
+
+      console.log(fullUrl);
+      if (!fullUrl) {
+        throw new Error("Image processing returned null");
+      }
+
+      // 2. Extract the file key from the URL just in case the frontend needs it for deletion
+      const fileName = fullUrl.split(`${MINIO_BUCKET_NAME}/`)[1];
+      console.log(fileName);
+
+      res.status(200).json({
+        success: true,
+        url: fullUrl,
+        fileName: fileName,
+      });
+    } catch (error) {
+      console.error("Upload route error:", error);
+      res
+        .status(500)
+        .json({ message: "Internal server error during image upload." });
     }
-
-    const { buffer, originalname } = req.file;
-
-    // Utilize the existing optimizeAndUpload pipeline
-    const { fileName } = await optimizeAndUpload(
-      buffer,
-      originalname,
-      "chats", // folder/prefix
-    );
-
-    // Generate the public URL format based on your MinIO setup
-    const fullUrl = `${MINIO_PUBLIC_URL}/${MINIO_BUCKET_NAME}/chats/${fileName}`;
-
-    res.status(200).json({
-      success: true,
-      url: fullUrl,
-      fileName: fileName,
-    });
-  } catch (error) {
-    console.error("Upload route error:", error);
-    res
-      .status(500)
-      .json({ message: "Internal server error during image upload." });
-  }
-});
-
-// Added Multer Error Handler
-router.use((err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    return res.status(400).json({ message: `Upload error: ${err.message}` });
-  } else if (err) {
-    return res.status(400).json({ message: err.message });
-  }
-  next();
-});
+  },
+);
 
 // ==========================================
 // 6. GET ONLINE USERS

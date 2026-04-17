@@ -91,6 +91,22 @@ enum PayoutStatus {
   CANCELLED
 }
 
+enum EventType {
+  PUBLIC
+  PRIVATE
+}
+
+enum PaymentType {
+  FREE
+  PAID
+}
+
+enum RsvpStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -482,27 +498,85 @@ model UserSubscription {
 // EVENTS & BLOG MODELS
 // ==========================================
 
-model Event {
-  id               String   @id @default(cuid())
-  title            String
-  category         String
-  price            Float    @default(0)
-  date             DateTime
-  time             String?
-  city             String
-  address          String?
-  imageUrl         String
-  description      String?  @db.Text
-  totalTickets     Int      @default(0)
-  availableTickets Int      @default(0)
-  status           String   @default("active")
+// model Event {
+//   id               String   @id @default(cuid())
+//   title            String
+//   category         String
+//   price            Float    @default(0)
+//   date             DateTime
+//   time             String?
+//   city             String
+//   address          String?
+//   imageUrl         String
+//   description      String?  @db.Text
+//   totalTickets     Int      @default(0)
+//   availableTickets Int      @default(0)
+//   status           String   @default("active")
 
-  hostId String?
-  host   User?   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+//   hostId String?
+//   host   User?   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+//   orders    Order[]
+// }
+
+model Event {
+  id       String @id @default(cuid())
+  title    String
+  category String
+
+  // --- New Privacy & Payment Fields ---
+  type          EventType   @default(PRIVATE)
+  paymentType   PaymentType @default(FREE)
+  price         Float       @default(0)
+  discountPrice Float?      @default(0)
+
+  // --- Details ---
+  date        DateTime
+  time        String?
+  city        String
+  address     String?
+  imageUrl    String
+  description String?  @db.Text
+
+  // --- Ticket Data ---
+  totalTickets     Int    @default(0)
+  availableTickets Int    @default(0)
+  status           String @default("active")
+
+  // --- Relations ---
+  hostId      String?
+  host        User?        @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  orders      Order[]
+  invitations Invitation[] // New: Links the event to its RSVPs/Guests
+
+  // --- Timestamps ---
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Invitation {
+  id      String @id @default(cuid())
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  guestName  String
+  guestEmail String
+  guestPhone String?
+
+  status RsvpStatus @default(PENDING)
+
+  // --- Security for Check-in ---
+  ticketToken String    @unique @default(uuid())
+  isCheckedIn Boolean   @default(false)
+  checkInTime DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  orders    Order[]
+
+  // Prevents a user from RSVPing multiple times to the same event with the same email
+  @@unique([eventId, guestEmail])
 }
 
 model Order {

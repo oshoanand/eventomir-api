@@ -1,5 +1,5 @@
 import { Router } from "express";
-import multer from "multer"; // Added explicit multer import
+import multer from "multer";
 import prisma from "../libs/prisma.js";
 import { createUploader } from "../utils/multer.js";
 import { verifyAuth } from "../middleware/verify-auth.js";

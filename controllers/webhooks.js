@@ -409,34 +409,155 @@ export const handleTinkoffWebhook = async (req, res) => {
 // =====================================================================
 // EVENT TICKETS WEBHOOK
 // =====================================================================
+// export const handleTinkoffEventTicketWebhook = async (req, res) => {
+//   try {
+//     const notification = req.body;
+
+//     const expectedToken = generateTinkoffToken(notification);
+//     if (expectedToken !== notification.Token) {
+//       console.error("Tinkoff Webhook Security Alert: Invalid Token");
+//       return res.status(403).send("OK");
+//     }
+
+//     const orderId = notification.OrderId;
+//     const status = notification.Status;
+//     const tinkoffPaymentId = String(notification.PaymentId);
+
+//     const order = await prisma.order.findUnique({
+//       where: { id: orderId },
+//       include: { event: true, user: true },
+//     });
+
+//     if (!order) return res.status(200).send("OK");
+
+//     // STRICT IDEMPOTENCY
+//     if (order.status === "ACTIVE" || order.status === "CANCELLED") {
+//       return res.status(200).send("OK");
+//     }
+
+//     if (status === "CONFIRMED") {
+//       // ✅ Update BOTH Order and Payment tables atomically
+//       await prisma.$transaction([
+//         prisma.order.update({
+//           where: { id: orderId },
+//           data: { status: "ACTIVE" },
+//         }),
+//         prisma.payment.updateMany({
+//           where: { providerTxId: tinkoffPaymentId },
+//           data: { status: "COMPLETED" },
+//         }),
+//       ]);
+
+//       if (typeof invalidateKeys === "function") {
+//         await invalidateKeys([
+//           "events:all",
+//           `events:${order.eventId}`,
+//           "orders:all",
+//           "orders:my",
+//         ]);
+//       }
+
+//       try {
+//         const pdfBuffer = await generateTicketPDF(
+//           order,
+//           order.event,
+//           order.user,
+//         );
+//         await sendTicketEmail(
+//           order.user.email,
+//           order.user.name,
+//           order.event.title,
+//           pdfBuffer,
+//         );
+//       } catch (err) {
+//         console.error("Failed to send ticket email post-purchase", err);
+//       }
+//     } else if (
+//       status === "REJECTED" ||
+//       status === "CANCELED" ||
+//       status === "DEADLINE_EXPIRED"
+//     ) {
+//       // ❌ Fail BOTH tables and restore tickets atomically
+//       await prisma.$transaction([
+//         prisma.order.update({
+//           where: { id: orderId },
+//           data: { status: "cancelled" },
+//         }),
+//         prisma.event.update({
+//           where: { id: order.eventId },
+//           data: { availableTickets: { increment: order.ticketCount } },
+//         }),
+//         prisma.payment.updateMany({
+//           where: { providerTxId: tinkoffPaymentId },
+//           data: { status: "FAILED" },
+//         }),
+//       ]);
+
+//       if (typeof invalidateKeys === "function") {
+//         await invalidateKeys(["events:all", `events:${order.eventId}`]);
+//       }
+//     }
+
+//     res.status(200).send("OK");
+//   } catch (error) {
+//     console.error("Tinkoff Webhook Error:", error);
+//     res.status(500).send("OK");
+//   }
+// };
+
+/**
+ * Обработчик вебхуков от Тинькофф Оплаты для билетов на мероприятия.
+ * Tinkoff ожидает ответ "OK" в теле письма и статус 200.
+ */
 export const handleTinkoffEventTicketWebhook = async (req, res) => {
   try {
     const notification = req.body;
 
+    // 1. БЕЗОПАСНОСТЬ: Проверка подписи (Token)
+    // Тинькофф присылает токен, который мы должны пересчитать и сравнить
     const expectedToken = generateTinkoffToken(notification);
+
     if (expectedToken !== notification.Token) {
-      console.error("Tinkoff Webhook Security Alert: Invalid Token");
-      return res.status(403).send("OK");
+      console.error("Tinkoff Webhook Security Alert: Invalid Token received");
+      // Возвращаем OK банку, чтобы он перестал слать этот вебхук, но логируем ошибку
+      return res.status(200).send("OK");
     }
 
     const orderId = notification.OrderId;
     const status = notification.Status;
     const tinkoffPaymentId = String(notification.PaymentId);
+    const paidAmount = notification.Amount; // В копейках
 
+    // 2. Поиск заказа в базе
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { event: true, user: true },
     });
 
-    if (!order) return res.status(200).send("OK");
-
-    // STRICT IDEMPOTENCY
-    if (order.status === "ACTIVE" || order.status === "CANCELLED") {
+    if (!order) {
+      console.error(`Tinkoff Webhook Error: Order ${orderId} not found`);
       return res.status(200).send("OK");
     }
 
+    // 3. ИДЕМПОТЕНТНОСТЬ
+    // Если заказ уже оплачен (ACTIVE), ничего не делаем, просто подтверждаем банку
+    if (order.status === "ACTIVE") {
+      return res.status(200).send("OK");
+    }
+
+    // 4. ЛОГИКА ОБРАБОТКИ СТАТУСОВ
+
+    // Статус CONFIRMED — деньги успешно списаны
     if (status === "CONFIRMED") {
-      // ✅ Update BOTH Order and Payment tables atomically
+      // Проверка суммы (защита от подмены данных)
+      if (Number(paidAmount) !== Math.round(order.totalPrice * 100)) {
+        console.error(
+          `Tinkoff Webhook Error: Amount mismatch for order ${orderId}`,
+        );
+        return res.status(200).send("OK");
+      }
+
+      // Атомарное обновление статуса заказа и платежа
       await prisma.$transaction([
         prisma.order.update({
           where: { id: orderId },
@@ -448,59 +569,77 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
         }),
       ]);
 
+      // Очистка кэша в Redis
       if (typeof invalidateKeys === "function") {
         await invalidateKeys([
           "events:all",
           `events:${order.eventId}`,
-          "orders:all",
           "orders:my",
+          "orders:all",
         ]);
       }
 
-      try {
-        const pdfBuffer = await generateTicketPDF(
-          order,
-          order.event,
-          order.user,
-        );
-        await sendTicketEmail(
-          order.user.email,
-          order.user.name,
-          order.event.title,
-          pdfBuffer,
-        );
-      } catch (err) {
-        console.error("Failed to send ticket email post-purchase", err);
-      }
-    } else if (
-      status === "REJECTED" ||
-      status === "CANCELED" ||
-      status === "DEADLINE_EXPIRED"
-    ) {
-      // ❌ Fail BOTH tables and restore tickets atomically
-      await prisma.$transaction([
-        prisma.order.update({
-          where: { id: orderId },
-          data: { status: "cancelled" },
-        }),
-        prisma.event.update({
-          where: { id: order.eventId },
-          data: { availableTickets: { increment: order.ticketCount } },
-        }),
-        prisma.payment.updateMany({
-          where: { providerTxId: tinkoffPaymentId },
-          data: { status: "FAILED" },
-        }),
-      ]);
+      // Фоновое выполнение: Генерация билета и отправка Email
+      // Мы НЕ используем await здесь, чтобы банк сразу получил ответ "OK"
+      processTicketDelivery(order).catch((err) =>
+        console.error("Async Ticket Delivery Error:", err),
+      );
+    }
 
-      if (typeof invalidateKeys === "function") {
-        await invalidateKeys(["events:all", `events:${order.eventId}`]);
+    // Статусы отмены или ошибки
+    else if (["REJECTED", "CANCELED", "DEADLINE_EXPIRED"].includes(status)) {
+      // Возвращаем билеты в продажу, если заказ еще не был отменен
+      if (order.status !== "CANCELLED") {
+        await prisma.$transaction([
+          prisma.order.update({
+            where: { id: orderId },
+            data: { status: "CANCELLED" },
+          }),
+          prisma.event.update({
+            where: { id: order.eventId },
+            data: { availableTickets: { increment: order.ticketCount } },
+          }),
+          prisma.payment.updateMany({
+            where: { providerTxId: tinkoffPaymentId },
+            data: { status: "FAILED" },
+          }),
+        ]);
+
+        if (typeof invalidateKeys === "function") {
+          await invalidateKeys(["events:all", `events:${order.eventId}`]);
+        }
       }
     }
 
+    // Обязательный ответ для Тинькофф
     res.status(200).send("OK");
   } catch (error) {
-    console.error("Tinkoff Webhook Error:", error);
-    res.status(500).send("OK");
+    console.error("CRITICAL: Tinkoff Webhook Error:", error);
+    // Все равно отправляем OK, чтобы предотвратить бесконечные повторы от банка
+    // и разбираемся в логах
+    res.status(200).send("OK");
   }
 };
+
+/**
+ * Вспомогательная функция для генерации PDF и отправки почты.
+ * Вынесена отдельно для асинхронного запуска.
+ */
+async function processTicketDelivery(order) {
+  try {
+    console.log(`Generating ticket for Order: ${order.id}`);
+
+    const pdfBuffer = await generateTicketPDF(order, order.event, order.user);
+
+    await sendTicketEmail(
+      order.user.email,
+      order.user.name,
+      order.event.title,
+      pdfBuffer,
+    );
+
+    console.log(`Ticket sent successfully to ${order.user.email}`);
+  } catch (error) {
+    throw error;
+  }
+}
