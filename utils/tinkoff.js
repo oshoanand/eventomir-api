@@ -219,11 +219,10 @@
 import crypto from "crypto";
 import "dotenv/config";
 
-const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8080";
+const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8800";
 const TINKOFF_TERMINAL_KEY = process.env.TINKOFF_TERMINAL_KEY;
 const TINKOFF_PASSWORD = process.env.TINKOFF_PASSWORD;
 const TINKOFF_API_URL = "https://securepay.tinkoff.ru/v2";
-// const TINKOFF_API_URL = "https://rest-api-test.tinkoff.ru/v2";
 const APP_URL = process.env.WEB_APP_URL || "http://localhost:3000";
 
 /**
@@ -235,15 +234,27 @@ export const generateTinkoffToken = (data) => {
 
   // 1. Filter out fields that SHOULD NOT be part of the signature
   // DATA, Receipt, and Token are excluded. Tinkoff only hashes flat values.
+  // Also strip null/undefined values to prevent hashing literal "undefined"
   const keys = Object.keys(params).filter(
-    (key) => !["Token", "Receipt", "DATA"].includes(key),
+    (key) =>
+      !["Token", "Receipt", "DATA"].includes(key) &&
+      params[key] !== undefined &&
+      params[key] !== null,
   );
 
   // 2. Sort keys alphabetically
   keys.sort();
 
-  // 3. Concatenate values of those keys
-  const concatenatedValues = keys.map((key) => params[key]).join("");
+  // 3. Concatenate values of those keys as strings
+  const concatenatedValues = keys
+    .map((key) => {
+      // Booleans must be explicitly stringified for Tinkoff
+      if (typeof params[key] === "boolean") {
+        return params[key] ? "true" : "false";
+      }
+      return String(params[key]);
+    })
+    .join("");
 
   // 4. SHA-256 Hash
   return crypto.createHash("sha256").update(concatenatedValues).digest("hex");
@@ -297,10 +308,10 @@ export const initTinkoffEventTicketPayment = async (
     DATA: { Email: userEmail },
     Receipt: {
       Email: userEmail,
-      Taxation: "usn_income", // Change based on your business type: osn, usn_income, etc.
+      Taxation: "usn_income",
       Items: [
         {
-          Name: `Билет: ${event.title}`,
+          Name: `Билет: ${event.title.substring(0, 64)}`, // Tinkoff Item Name max length is 64 chars
           Price: Math.round(event.price * 100),
           Quantity: order.ticketCount,
           Amount: Math.round(order.totalPrice * 100),
@@ -339,7 +350,7 @@ export const initTinkoffRequestPayment = async (
       Taxation: "usn_income",
       Items: [
         {
-          Name: `Публикация заявки: ${category}`,
+          Name: `Публикация заявки: ${category.substring(0, 45)}`,
           Price: Math.round(amount * 100),
           Quantity: 1,
           Amount: Math.round(amount * 100),
@@ -382,8 +393,8 @@ export const initTinkoffTopUpPayment = async (
           Price: Math.round(amount * 100),
           Quantity: 1,
           Amount: Math.round(amount * 100),
-          PaymentMethod: "full_prepayment",
-          PaymentObject: "payment", // Use 'payment' for top-ups
+          PaymentMethod: "advance", // Use 'advance' or 'payment' for top-ups
+          PaymentObject: "payment",
           Tax: "none",
         },
       ],
@@ -421,7 +432,7 @@ export const initTinkoffSubscriptionPayment = async (
       Taxation: "usn_income",
       Items: [
         {
-          Name: `Тариф: ${planName}`,
+          Name: `Тариф: ${planName.substring(0, 50)}`,
           Price: Math.round(amount * 100),
           Quantity: 1,
           Amount: Math.round(amount * 100),

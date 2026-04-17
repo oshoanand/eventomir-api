@@ -20,8 +20,6 @@ export const getPlans = async (req, res) => {
 export const getCurrentSubscription = async (req, res) => {
   try {
     const userId = req.user.id;
-
-    // 🚨 FIX: UserSubscription schema has userId as @unique, and uses `isActive` boolean
     const sub = await prisma.userSubscription.findUnique({
       where: { userId: userId },
       include: { plan: true },
@@ -29,7 +27,6 @@ export const getCurrentSubscription = async (req, res) => {
 
     if (!sub) return res.status(200).json(null);
 
-    // Calculate dynamic status
     const isExpired =
       !sub.isActive || (sub.endDate && new Date(sub.endDate) < new Date());
 
@@ -37,10 +34,10 @@ export const getCurrentSubscription = async (req, res) => {
       id: sub.id,
       planId: sub.planId,
       planName: sub.plan.name,
-      status: isExpired ? "EXPIRED" : "ACTIVE", // Mapped for frontend compatibility
+      status: isExpired ? "EXPIRED" : "ACTIVE",
       startDate: sub.startDate,
       endDate: sub.endDate,
-      pricePaid: 0, // Fallback as pricePaid is not in schema
+      pricePaid: 0,
     });
   } catch (error) {
     console.error("Get Subscription Error:", error);
@@ -52,37 +49,37 @@ export const getCurrentSubscription = async (req, res) => {
 export const initiateCheckout = async (req, res) => {
   try {
     const userId = req.user.id;
-    const userEmail = req.user.email;
-    const { planId, interval, paymentMethod } = req.body; // 🚨 Extracted paymentMethod
+
+    // 🚨 FIX: Fallback email to prevent Tinkoff Receipt formatting crash
+    const userEmail = req.user.email || "no-reply@eventomir.ru";
+    const { planId, interval, paymentMethod } = req.body;
 
     if (!planId || !interval) {
-      return res
-        .status(400)
-        .json({ message: "Plan ID and interval are required." });
+      return res.status(400).json({ message: "Не указан тариф или период." });
     }
 
-    // 1. Find the requested plan
     const plan = await prisma.subscriptionPlan.findUnique({
       where: { id: planId },
     });
 
-    if (!plan) return res.status(404).json({ message: "Plan not found." });
+    if (!plan) return res.status(404).json({ message: "Тариф не найден." });
 
-    // 2. Determine correct price based on interval
+    // Determine correct price based on interval
     let price = plan.priceMonthly;
     if (interval === "half_year" && plan.priceHalfYearly)
       price = plan.priceHalfYearly;
     if (interval === "year" && plan.priceYearly) price = plan.priceYearly;
 
     if (price <= 0) {
-      return res.status(400).json({ message: "Invalid plan price." });
+      return res.status(400).json({ message: "Неверная цена тарифа." });
     }
 
-    // --- 🚀 NEW: WALLET PAYMENT LOGIC ---
+    // --- WALLET PAYMENT LOGIC ---
     if (paymentMethod === "wallet") {
       const user = await prisma.user.findUnique({ where: { id: userId } });
+      const currentBalance = user.walletBalance || 0; // Prevent null errors
 
-      if (user.walletBalance < price) {
+      if (currentBalance < price) {
         return res
           .status(400)
           .json({ message: "Недостаточно средств на балансе кошелька." });
@@ -96,23 +93,19 @@ export const initiateCheckout = async (req, res) => {
       if (interval === "year")
         newEndDate.setFullYear(newEndDate.getFullYear() + 1);
 
-      // Execute atomic transaction for wallet payment
       await prisma.$transaction([
-        // 1. Deduct Balance
         prisma.user.update({
           where: { id: userId },
           data: { walletBalance: { decrement: price } },
         }),
-        // 2. Log Wallet Transaction
         prisma.walletTransaction.create({
           data: {
             userId: userId,
-            amount: -price, // Negative because it's a payment
+            amount: -price,
             type: "PAYMENT",
             description: `Оплата подписки: ${plan.name}`,
           },
         }),
-        // 3. Upsert User Subscription
         prisma.userSubscription.upsert({
           where: { userId: userId },
           update: {
@@ -129,7 +122,6 @@ export const initiateCheckout = async (req, res) => {
             isActive: true,
           },
         }),
-        // 4. Log General Payment
         prisma.payment.create({
           data: {
             userId: userId,
@@ -141,34 +133,27 @@ export const initiateCheckout = async (req, res) => {
         }),
       ]);
 
-      // Return null checkoutUrl since it's instantly completed
       return res.status(200).json({ success: true, checkoutUrl: null });
     }
 
     // --- CARD PAYMENT LOGIC (TINKOFF) ---
-    // 3. Create Pending Payment with Metadata for the Webhook
     const payment = await prisma.payment.create({
       data: {
         userId: userId,
         amount: price,
         provider: "tinkoff",
         status: "PENDING",
-        metadata: {
-          type: "SUBSCRIPTION",
-          planId: plan.id,
-          interval: interval,
-        },
+        metadata: { type: "SUBSCRIPTION", planId: plan.id, interval },
       },
     });
 
-    // 4. Call Tinkoff API
     try {
       const tinkoffData = await initTinkoffSubscriptionPayment(
         payment.id,
         price,
         plan.name,
         interval,
-        userEmail,
+        userEmail, // Now guaranteed to be a valid string
       );
 
       await prisma.payment.update({
@@ -181,25 +166,32 @@ export const initiateCheckout = async (req, res) => {
         checkoutUrl: tinkoffData.paymentUrl,
       });
     } catch (tinkoffError) {
+      console.error(
+        "TINKOFF INIT FATAL ERROR:",
+        tinkoffError.message || tinkoffError,
+      );
+
       await prisma.payment.update({
         where: { id: payment.id },
         data: { status: "FAILED" },
       });
-      throw new Error("TINKOFF_INIT_FAILED");
+
+      // 🚨 FIX: Pass the exact Tinkoff error to the frontend instead of masking it!
+      return res.status(502).json({
+        message: `Ошибка банка: ${tinkoffError.message}`,
+      });
     }
   } catch (error) {
     console.error("Checkout Error:", error);
-    if (error.message === "TINKOFF_INIT_FAILED") {
-      return res.status(502).json({ message: "Ошибка платежного шлюза." });
-    }
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: "Внутренняя ошибка сервера" });
   }
 };
 
 export const getRequestPrice = async (req, res) => {
   try {
-    const FIXED_REQUEST_PRICE = process.env.REQUEST_PRICE || 490;
-
+    const FIXED_REQUEST_PRICE = process.env.REQUEST_PRICE
+      ? parseInt(process.env.REQUEST_PRICE)
+      : 490;
     res.status(200).json({ price: FIXED_REQUEST_PRICE });
   } catch (error) {
     console.error("Get Request Price Error:", error);
