@@ -210,7 +210,7 @@ import { generateTinkoffToken } from "../utils/tinkoff.js";
 import { notifyTargetedPerformers } from "./request.js";
 import { invalidateKeys } from "../libs/redis.js";
 
-// Import your mailer utilities
+// Import mailer utilities
 import {
   generateTicketPDF,
   generateSubscriptionReceiptPDF,
@@ -221,28 +221,28 @@ import {
 } from "../mailer/email-sender.js";
 
 // =====================================================================
-// GENERAL PAYMENTS WEBHOOK (Wallet, Requests, Subscriptions)
+// 1. GENERAL PAYMENTS WEBHOOK (Wallet, Requests, Subscriptions)
 // =====================================================================
 export const handleTinkoffWebhook = async (req, res) => {
   try {
     const payload = req.body;
 
     // ----------------------------------------------------------------
-    // 1. SECURITY: VERIFY SIGNATURE
+    // A. SECURITY: VERIFY SIGNATURE
     // ----------------------------------------------------------------
     const expectedToken = generateTinkoffToken(payload);
 
     if (expectedToken !== payload.Token) {
       console.error(
-        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature detected!",
-        { expected: expectedToken, received: payload.Token, payload },
+        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature detected (General)!",
+        { expected: expectedToken, received: payload.Token },
       );
       // ALWAYS return 200 OK to the bank so it stops retrying the bad request
       return res.status(200).send("OK");
     }
 
     // ----------------------------------------------------------------
-    // 2. EXTRACT DATA & PREVENT DOUBLE-SPENDING (IDEMPOTENCY)
+    // B. EXTRACT DATA & IDEMPOTENCY CHECK
     // ----------------------------------------------------------------
     const orderId = payload.OrderId;
     const status = payload.Status;
@@ -261,17 +261,13 @@ export const handleTinkoffWebhook = async (req, res) => {
       return res.status(200).send("OK");
     }
 
-    // Idempotency: If already completed, do nothing
+    // Idempotency: If already completed, do nothing and confirm to bank
     if (payment.status === "COMPLETED") {
       return res.status(200).send("OK");
     }
 
     // Handle Failures
-    if (
-      status === "REJECTED" ||
-      status === "CANCELED" ||
-      status === "DEADLINE_EXPIRED"
-    ) {
+    if (["REJECTED", "CANCELED", "DEADLINE_EXPIRED"].includes(status)) {
       await prisma.payment.update({
         where: { id: payment.id },
         data: { status: "FAILED" },
@@ -280,7 +276,7 @@ export const handleTinkoffWebhook = async (req, res) => {
     }
 
     // ----------------------------------------------------------------
-    // 3. PROCESS SUCCESSFUL PAYMENTS (CONFIRMED)
+    // C. PROCESS SUCCESSFUL PAYMENTS (CONFIRMED)
     // ----------------------------------------------------------------
     if (status === "CONFIRMED") {
       // Security Check: Ensure the amount paid matches the DB record
@@ -293,7 +289,7 @@ export const handleTinkoffWebhook = async (req, res) => {
 
       const metadata = payment.metadata || {};
 
-      // === SCENARIO A: WALLET TOP-UP ===
+      // === SCENARIO 1: WALLET TOP-UP ===
       if (metadata.type === "WALLET_TOPUP") {
         await prisma.$transaction([
           prisma.payment.update({
@@ -318,7 +314,7 @@ export const handleTinkoffWebhook = async (req, res) => {
         );
       }
 
-      // === SCENARIO B: DIRECT PAID REQUEST ===
+      // === SCENARIO 2: DIRECT PAID REQUEST ===
       else if (payment.paidRequestId) {
         await prisma.$transaction([
           prisma.payment.update({
@@ -339,7 +335,7 @@ export const handleTinkoffWebhook = async (req, res) => {
         }
       }
 
-      // === SCENARIO C: SUBSCRIPTION PRICING PLAN ===
+      // === SCENARIO 3: SUBSCRIPTION PRICING PLAN ===
       else if (metadata.type === "SUBSCRIPTION") {
         const { planId, interval } = metadata;
 
@@ -410,15 +406,25 @@ export const handleTinkoffWebhook = async (req, res) => {
 };
 
 // =====================================================================
-// EVENT TICKETS WEBHOOK
+// 2. EVENT TICKETS WEBHOOK
 // =====================================================================
 export const handleTinkoffEventTicketWebhook = async (req, res) => {
   try {
     const notification = req.body;
 
+    // ----------------------------------------------------------------
+    // A. SECURITY: VERIFY SIGNATURE
+    // ----------------------------------------------------------------
     const expectedToken = generateTinkoffToken(notification);
+
     if (expectedToken !== notification.Token) {
-      console.error("Tinkoff Webhook Security Alert: Invalid Token received");
+      console.error(
+        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature (Events)!",
+        {
+          expected: expectedToken,
+          received: notification.Token,
+        },
+      );
       return res.status(200).send("OK");
     }
 
@@ -427,20 +433,29 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
     const tinkoffPaymentId = String(notification.PaymentId);
     const paidAmount = notification.Amount;
 
+    // ----------------------------------------------------------------
+    // B. EXTRACT DATA & IDEMPOTENCY CHECK
+    // ----------------------------------------------------------------
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { event: true, user: true },
     });
 
-    if (!order) return res.status(200).send("OK");
+    if (!order) {
+      console.error(`Webhook Error: Order ID ${orderId} not found in DB.`);
+      return res.status(200).send("OK");
+    }
 
     if (order.status === "ACTIVE" || order.status === "CANCELLED") {
       return res.status(200).send("OK");
     }
 
+    // ----------------------------------------------------------------
+    // C. PROCESS PAYMENT STATUS
+    // ----------------------------------------------------------------
     if (status === "CONFIRMED") {
       if (Number(paidAmount) !== Math.round(order.totalPrice * 100)) {
-        console.error(`Amount mismatch for order ${orderId}`);
+        console.error(`🚨 Amount mismatch for order ${orderId}`);
         return res.status(200).send("OK");
       }
 
@@ -470,6 +485,7 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
       );
     } else if (["REJECTED", "CANCELED", "DEADLINE_EXPIRED"].includes(status)) {
       if (order.status !== "CANCELLED") {
+        // Restore tickets and mark as failed
         await prisma.$transaction([
           prisma.order.update({
             where: { id: orderId },
@@ -493,16 +509,21 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
 
     res.status(200).send("OK");
   } catch (error) {
-    console.error("CRITICAL: Tinkoff Webhook Error:", error);
+    console.error("CRITICAL: Tinkoff Event Webhook Error:", error);
     res.status(200).send("OK");
   }
 };
 
 // =====================================================================
-// ASYNC MAILER HELPERS
+// 3. ASYNC MAILER HELPERS
 // =====================================================================
+
+/**
+ * Generates and emails the subscription receipt PDF without blocking the response.
+ */
 async function processSubscriptionDelivery(payment, plan, amount, interval) {
   try {
+    console.log(`Generating Subscription PDF for: ${payment.user.email}`);
     const pdfBuffer = await generateSubscriptionReceiptPDF(
       payment,
       payment.user,
@@ -517,13 +538,18 @@ async function processSubscriptionDelivery(payment, plan, amount, interval) {
       plan?.name || "Premium",
       pdfBuffer,
     );
+    console.log(`✅ Subscription email sent to: ${payment.user.email}`);
   } catch (error) {
     throw error;
   }
 }
 
+/**
+ * Generates and emails the Event Ticket PDF without blocking the response.
+ */
 async function processTicketDelivery(order) {
   try {
+    console.log(`Generating Event Ticket PDF for Order: ${order.id}`);
     const pdfBuffer = await generateTicketPDF(order, order.event, order.user);
 
     await sendTicketEmail(
@@ -532,6 +558,7 @@ async function processTicketDelivery(order) {
       order.event.title,
       pdfBuffer,
     );
+    console.log(`✅ Event Ticket email sent to: ${order.user.email}`);
   } catch (error) {
     throw error;
   }

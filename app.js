@@ -87,15 +87,6 @@ async function initializeExpressServer() {
     next();
   });
 
-  // 🚨 CRITICAL FIX: Mount Webhooks BEFORE express.json()
-  // Payment gateways (Tinkoff/Stripe/etc) require raw bodies to verify webhook signatures.
-  // If express.json() parses it first, the signature check will fail.
-  app.use(
-    "/api/webhooks",
-    express.raw({ type: "application/json" }),
-    webhookRoutes,
-  );
-
   // --- Standard Express Middleware for all other routes ---
   app.use(express.json());
   app.use(
@@ -140,6 +131,7 @@ async function initializeExpressServer() {
   app.use("/api/reviews", reviewsRoutes);
   app.use("/api/wallet", walletRoutes);
   app.use("/api/fcm", fcmRoutes);
+  app.use("/api/webhooks", webhookRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;
