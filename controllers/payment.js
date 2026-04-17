@@ -27,8 +27,12 @@ export const getCurrentSubscription = async (req, res) => {
 
     if (!sub) return res.status(200).json(null);
 
+    // const isExpired =
+    //   !sub.isActive || (sub.endDate && new Date(sub.endDate) < new Date());
+
     const isExpired =
-      !sub.isActive || (sub.endDate && new Date(sub.endDate) < new Date());
+      sub.status !== "ACTIVE" ||
+      (sub.endDate && new Date(sub.endDate) < new Date());
 
     res.status(200).json({
       id: sub.id,

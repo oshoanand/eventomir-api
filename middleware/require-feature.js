@@ -16,14 +16,22 @@ const DEFAULT_FREE_FEATURES = {
 export const getEffectiveFeatures = async (userId) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { subscription: { include: { plan: true } } },
+    // We include both potential relation names to ensure it doesn't crash
+    // depending on how you named it in your User model.
+    include: {
+      userSubscription: { include: { plan: true } },
+      subscription: { include: { plan: true } }, // Fallback if named 'subscription'
+    },
   });
 
   const now = new Date();
-  const sub = user?.subscription;
 
-  // 🚨 STRICT EXPIRATION CHECK (Backend JIT Guard)
-  if (sub && sub.isActive && sub.plan) {
+  // Safely extract the subscription regardless of the relation name
+  const sub = user?.userSubscription || user?.subscription;
+
+  // 🚨 CRITICAL FIX: Replaced `sub.isActive` with `sub.status === "ACTIVE"`
+  // to match the updated Prisma Schema string-based status.
+  if (sub && sub.status === "ACTIVE" && sub.plan) {
     // If the user is on a paid plan with an expiration date that has ALREADY PASSED
     if (
       sub.plan.tier !== "FREE" &&
@@ -62,7 +70,7 @@ export const getEffectiveFeatures = async (userId) => {
     return { ...DEFAULT_FREE_FEATURES, ...normalizedFeatures };
   }
 
-  // Fallback if user has no subscription or it was set to inactive
+  // Fallback if user has no subscription or it was EXPIRED/CANCELLED
   return DEFAULT_FREE_FEATURES;
 };
 

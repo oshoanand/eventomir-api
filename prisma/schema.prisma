@@ -42,6 +42,12 @@ enum SubscriptionTier {
   PREMIUM
 }
 
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
 enum PaymentStatus {
   PENDING
   COMPLETED
@@ -477,6 +483,23 @@ model SubscriptionPlan {
   subscriptions UserSubscription[]
 }
 
+// model UserSubscription {
+//   id     String @id @default(uuid())
+//   userId String @unique
+//   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   planId String
+//   plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+//   startDate DateTime  @default(now())
+//   endDate   DateTime?
+//   isActive  Boolean   @default(true)
+//   autoRenew Boolean   @default(false)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+// }
+
 model UserSubscription {
   id     String @id @default(uuid())
   userId String @unique
@@ -487,8 +510,14 @@ model UserSubscription {
 
   startDate DateTime  @default(now())
   endDate   DateTime?
-  isActive  Boolean   @default(true)
-  autoRenew Boolean   @default(false)
+
+  // 🚨 FIX 1: Replaced 'isActive' Boolean with 'status' String to match the webhook logic
+  status SubscriptionStatus @default(ACTIVE) // "ACTIVE", "EXPIRED", "CANCELLED"
+
+  // 🚨 FIX 2: Added pricePaid to store the transaction amount
+  pricePaid Float?
+
+  autoRenew Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
