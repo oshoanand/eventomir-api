@@ -158,7 +158,131 @@ export const generateTicketPDF = async (order, event, user) => {
 /**
  * Generates a PDF Receipt/Invoice for Subscription Purchases.
  */
-export const generateSubscriptionReceiptPDF = (
+// export const generateSubscriptionReceiptPDF = (
+//   payment,
+//   user,
+//   plan,
+//   amount,
+//   interval,
+// ) => {
+//   return new Promise((resolve, reject) => {
+//     try {
+//       const doc = new PDFDocument({ size: "A4", margin: 50 });
+//       const buffers = [];
+
+//       doc.on("data", buffers.push.bind(buffers));
+
+//       doc.on("end", () => {
+//         const pdfData = Buffer.concat(buffers);
+//         resolve(pdfData);
+//       });
+
+//       // Map interval to readable English text
+//       const intervalMap = {
+//         month: "1 Month",
+//         half_year: "6 Months",
+//         year: "1 Year",
+//       };
+//       const billingPeriod = intervalMap[interval] || interval;
+
+//       const paymentDate = new Date().toLocaleDateString();
+
+//       // --- RECEIPT DESIGN ---
+
+//       // Header
+//       doc
+//         .fontSize(28)
+//         .fillColor("#2563EB") // A professional blue for receipts
+//         .text("Eventomir", { align: "left" });
+
+//       doc
+//         .fontSize(12)
+//         .fillColor("#6B7280")
+//         .text("Payment Receipt / Invoice", { align: "left" });
+//       doc.moveDown(2);
+
+//       // Customer Details & Invoice Details (Two Columns)
+//       const topY = doc.y;
+
+//       // Left Column: Billed To
+//       doc.fontSize(10).fillColor("#9CA3AF").text("BILLED TO:", 50, topY);
+//       doc
+//         .fontSize(12)
+//         .fillColor("#111827")
+//         .text(user.name || "Customer", 50, topY + 15);
+//       doc
+//         .fontSize(10)
+//         .fillColor("#4B5563")
+//         .text(user.email, 50, topY + 30);
+
+//       // Right Column: Receipt Info
+//       doc.fontSize(10).fillColor("#9CA3AF").text("RECEIPT DETAILS:", 350, topY);
+//       doc
+//         .fontSize(10)
+//         .fillColor("#4B5563")
+//         .text(
+//           `Receipt No: ${payment.id.split("-")[0].toUpperCase()}`,
+//           350,
+//           topY + 15,
+//         );
+//       doc.text(`Date: ${paymentDate}`, 350, topY + 30);
+//       doc.text(`Status: PAID`, 350, topY + 45);
+
+//       doc.moveDown(4);
+
+//       // Table Header
+//       const tableTop = doc.y;
+//       doc.rect(50, tableTop, 495, 25).fill("#F3F4F6"); // Light gray header background
+//       doc.fontSize(10).fillColor("#374151").font("Helvetica-Bold");
+//       doc.text("DESCRIPTION", 60, tableTop + 8);
+//       doc.text("BILLING PERIOD", 250, tableTop + 8);
+//       doc.text("AMOUNT", 450, tableTop + 8);
+
+//       doc.font("Helvetica"); // reset to normal
+
+//       // Table Row
+//       const rowTop = tableTop + 35;
+//       doc.fontSize(12).fillColor("#111827");
+//       doc.text(`Subscription: ${plan?.name || "Premium"} Plan`, 60, rowTop);
+//       doc.text(billingPeriod, 250, rowTop);
+//       doc.text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop);
+
+//       // Divider Line
+//       doc
+//         .moveTo(50, rowTop + 25)
+//         .lineTo(545, rowTop + 25)
+//         .stroke("#E5E7EB");
+
+//       // Total Section
+//       doc.fontSize(14).font("Helvetica-Bold");
+//       doc.text("TOTAL PAID:", 300, rowTop + 45);
+//       doc
+//         .fillColor("#10B981")
+//         .text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop + 45);
+//       doc.font("Helvetica"); // reset to normal
+
+//       doc.moveDown(6);
+
+//       // Footer
+//       doc
+//         .fontSize(10)
+//         .fillColor("#9CA3AF")
+//         .text(
+//           "Thank you for your subscription! If you have any questions, please contact support.",
+//           50,
+//           doc.y,
+//           { align: "center", width: 495 },
+//         );
+
+//       // Finalize the PDF
+//       doc.end();
+//     } catch (error) {
+//       reject(error);
+//     }
+//   });
+// };
+
+export const generateSubscriptionReceiptPDF = async (
   payment,
   user,
   plan,
@@ -170,111 +294,113 @@ export const generateSubscriptionReceiptPDF = (
       const doc = new PDFDocument({ size: "A4", margin: 50 });
       const buffers = [];
 
-      doc.on("data", buffers.push.bind(buffers));
+      doc.on("data", (chunk) => buffers.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(buffers)));
+      doc.on("error", (err) => reject(err));
 
-      doc.on("end", () => {
-        const pdfData = Buffer.concat(buffers);
-        resolve(pdfData);
+      // --- HEADER ---
+      doc
+        .fillColor("#2563EB")
+        .fontSize(28)
+        .font("Helvetica-Bold")
+        .text("Eventomir");
+      doc
+        .fillColor("#6B7280")
+        .fontSize(10)
+        .font("Helvetica")
+        .text("app.eventomir.ru");
+
+      doc.moveDown(2);
+
+      // --- RECEIPT TITLE & META ---
+      doc
+        .fillColor("#111827")
+        .fontSize(20)
+        .font("Helvetica-Bold")
+        .text("RECEIPT / КВИТАНЦИЯ", { align: "right", continued: true })
+        .moveUp();
+
+      doc.fontSize(10).fillColor("#4B5563").font("Helvetica");
+      doc.text(`Receipt No: #${payment.id.split("-")[0].toUpperCase()}`, {
+        align: "right",
       });
+      doc.text(
+        `Date: ${new Date(payment.createdAt).toLocaleDateString("ru-RU")}`,
+        { align: "right" },
+      );
+      doc.text(`Status: PAID`, { align: "right" });
 
-      // Map interval to readable English text
-      const intervalMap = {
+      doc.moveDown(3);
+
+      // --- CUSTOMER INFO ---
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(12)
+        .fillColor("#111827")
+        .text("BILLED TO:");
+      doc.font("Helvetica").fontSize(10).fillColor("#4B5563");
+      doc.text(user.name || "Customer");
+      doc.text(user.email);
+      doc.text(`User ID: ${user.id.slice(0, 8)}...`);
+
+      doc.moveDown(3);
+
+      // --- TABLE HEADER ---
+      const tableTop = doc.y;
+      doc.rect(50, tableTop, 495, 25).fill("#F3F4F6");
+
+      doc.fillColor("#6B7280").font("Helvetica-Bold").fontSize(10);
+      doc.text("DESCRIPTION", 60, tableTop + 8);
+      doc.text("INTERVAL", 300, tableTop + 8);
+      doc.text("AMOUNT", 450, tableTop + 8, { width: 85, align: "right" });
+
+      // --- TABLE ROW (ITEM) ---
+      const itemTop = tableTop + 35;
+
+      const intervalNames = {
         month: "1 Month",
         half_year: "6 Months",
         year: "1 Year",
       };
-      const billingPeriod = intervalMap[interval] || interval;
+      const periodLabel = intervalNames[interval] || "Subscription";
 
-      const paymentDate = new Date().toLocaleDateString();
+      doc.fillColor("#111827").font("Helvetica").fontSize(11);
+      doc.text(`Subscription: ${plan.name}`, 60, itemTop);
+      doc.text(periodLabel, 300, itemTop);
+      doc.text(`${amount.toLocaleString("ru-RU")} RUB`, 450, itemTop, {
+        width: 85,
+        align: "right",
+      });
 
-      // --- RECEIPT DESIGN ---
-
-      // Header
-      doc
-        .fontSize(28)
-        .fillColor("#2563EB") // A professional blue for receipts
-        .text("Eventomir", { align: "left" });
-
-      doc
-        .fontSize(12)
-        .fillColor("#6B7280")
-        .text("Payment Receipt / Invoice", { align: "left" });
       doc.moveDown(2);
 
-      // Customer Details & Invoice Details (Two Columns)
-      const topY = doc.y;
+      // --- TOTALS ---
+      doc.moveTo(350, doc.y).lineTo(545, doc.y).stroke("#E5E7EB");
+      doc.moveDown(1);
 
-      // Left Column: Billed To
-      doc.fontSize(10).fillColor("#9CA3AF").text("BILLED TO:", 50, topY);
+      doc.font("Helvetica-Bold").fontSize(14);
+      doc.text("TOTAL PAID:", 300, doc.y);
       doc
-        .fontSize(12)
-        .fillColor("#111827")
-        .text(user.name || "Customer", 50, topY + 15);
-      doc
-        .fontSize(10)
-        .fillColor("#4B5563")
-        .text(user.email, 50, topY + 30);
+        .fillColor("#2563EB")
+        .text(`${amount.toLocaleString("ru-RU")} RUB`, 400, doc.y, {
+          width: 135,
+          align: "right",
+        });
 
-      // Right Column: Receipt Info
-      doc.fontSize(10).fillColor("#9CA3AF").text("RECEIPT DETAILS:", 350, topY);
-      doc
-        .fontSize(10)
-        .fillColor("#4B5563")
-        .text(
-          `Receipt No: ${payment.id.split("-")[0].toUpperCase()}`,
-          350,
-          topY + 15,
-        );
-      doc.text(`Date: ${paymentDate}`, 350, topY + 30);
-      doc.text(`Status: PAID`, 350, topY + 45);
+      // --- FOOTER ---
+      doc.moveDown(10);
+      doc.fillColor("#9CA3AF").fontSize(9).font("Helvetica-Oblique");
+      doc.text(
+        "This is an automatically generated electronic receipt.",
+        50,
+        doc.y,
+        { align: "center", width: 495 },
+      );
+      doc.text("Eventomir LLC | support@eventomir.ru", {
+        align: "center",
+        width: 495,
+      });
 
-      doc.moveDown(4);
-
-      // Table Header
-      const tableTop = doc.y;
-      doc.rect(50, tableTop, 495, 25).fill("#F3F4F6"); // Light gray header background
-      doc.fontSize(10).fillColor("#374151").font("Helvetica-Bold");
-      doc.text("DESCRIPTION", 60, tableTop + 8);
-      doc.text("BILLING PERIOD", 250, tableTop + 8);
-      doc.text("AMOUNT", 450, tableTop + 8);
-
-      doc.font("Helvetica"); // reset to normal
-
-      // Table Row
-      const rowTop = tableTop + 35;
-      doc.fontSize(12).fillColor("#111827");
-      doc.text(`Subscription: ${plan?.name || "Premium"} Plan`, 60, rowTop);
-      doc.text(billingPeriod, 250, rowTop);
-      doc.text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop);
-
-      // Divider Line
-      doc
-        .moveTo(50, rowTop + 25)
-        .lineTo(545, rowTop + 25)
-        .stroke("#E5E7EB");
-
-      // Total Section
-      doc.fontSize(14).font("Helvetica-Bold");
-      doc.text("TOTAL PAID:", 300, rowTop + 45);
-      doc
-        .fillColor("#10B981")
-        .text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop + 45);
-      doc.font("Helvetica"); // reset to normal
-
-      doc.moveDown(6);
-
-      // Footer
-      doc
-        .fontSize(10)
-        .fillColor("#9CA3AF")
-        .text(
-          "Thank you for your subscription! If you have any questions, please contact support.",
-          50,
-          doc.y,
-          { align: "center", width: 495 },
-        );
-
-      // Finalize the PDF
       doc.end();
     } catch (error) {
       reject(error);
