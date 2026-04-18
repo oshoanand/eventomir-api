@@ -289,6 +289,9 @@ export const generateSubscriptionReceiptPDF = async (
   amount,
   interval,
 ) => {
+  console.log(payment);
+  console.log(user);
+  console.log(plan);
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: "A4", margin: 50 });

@@ -17,6 +17,88 @@ const router = express.Router();
 // ==========================================
 // 1. OAUTH COMPLETION ROUTE
 // ==========================================
+// router.patch("/complete-registration", verifyAuth, async (req, res) => {
+//   try {
+//     const { role, phone, city, accountType, companyName, inn } = req.body;
+//     const userId = req.user.id;
+
+//     const validRoles = ["customer", "performer", "partner"];
+//     if (!role || !validRoles.includes(role)) {
+//       return res.status(400).json({ message: "Выбрана недопустимая роль." });
+//     }
+
+//     const updatedUser = await prisma.user.update({
+//       where: { id: userId },
+//       data: {
+//         role: role,
+//         phone: phone || null,
+//         city: city || null,
+//         account_type: accountType || "individual",
+//         company_name: companyName || null,
+//         inn: inn || null,
+//       },
+//     });
+
+//     // 🚨 ROBUST FIX: Automatically assign FREE plan if they selected "performer"
+//     if (role === "performer") {
+//       const freePlan = await prisma.subscriptionPlan.findUnique({
+//         where: { tier: "FREE" },
+//       });
+
+//       if (freePlan) {
+//         // Ensure we don't duplicate subscriptions if they already have one
+//         const existingSub = await prisma.userSubscription.findUnique({
+//           where: { userId: userId },
+//         });
+
+//         if (!existingSub) {
+//           await prisma.userSubscription.create({
+//             data: {
+//               userId: userId,
+//               planId: freePlan.id,
+//               isActive: true,
+//             },
+//           });
+//         }
+//       }
+//     }
+
+//     // Invalidate the cache for the specific role lists
+//     if (role === "customer") await invalidatePattern("users:customers_p*");
+//     if (role === "performer") await invalidatePattern("users:performers_p*");
+
+//     // NOTIFY ADMINS IF A NEW PERFORMER COMPLETES OAUTH
+//     if (role === "performer") {
+//       const admins = await prisma.user.findMany({
+//         where: { role: "administrator" },
+//         select: { id: true },
+//       });
+
+//       if (admins.length > 0) {
+//         await Promise.all(
+//           admins.map((admin) =>
+//             notifyUser({
+//               userId: admin.id,
+//               title: "👤 Новый исполнитель (OAuth)",
+//               body: `${updatedUser.name} завершил регистрацию через соцсети.`,
+//               type: "MODERATION_UPDATE",
+//               data: { url: `/users` },
+//             }),
+//           ),
+//         );
+//       }
+//     }
+
+//     res.status(200).json({
+//       message: "Регистрация успешно завершена",
+//       user: updatedUser,
+//     });
+//   } catch (error) {
+//     console.error("Complete registration error:", error);
+//     res.status(500).json({ message: "Внутренняя ошибка сервера" });
+//   }
+// });
+
 router.patch("/complete-registration", verifyAuth, async (req, res) => {
   try {
     const { role, phone, city, accountType, companyName, inn } = req.body;
@@ -41,7 +123,8 @@ router.patch("/complete-registration", verifyAuth, async (req, res) => {
 
     // 🚨 ROBUST FIX: Automatically assign FREE plan if they selected "performer"
     if (role === "performer") {
-      const freePlan = await prisma.subscriptionPlan.findUnique({
+      // 🚨 FIX 1: Changed findUnique to findFirst (prevents Prisma crash if 'tier' is not @unique)
+      const freePlan = await prisma.subscriptionPlan.findFirst({
         where: { tier: "FREE" },
       });
 
@@ -56,7 +139,8 @@ router.patch("/complete-registration", verifyAuth, async (req, res) => {
             data: {
               userId: userId,
               planId: freePlan.id,
-              isActive: true,
+              status: "ACTIVE", // 🚨 FIX 2: Replaced 'isActive: true' with the new 'status' field
+              pricePaid: 0, // 🚨 FIX 3: Explicitly set pricePaid to 0 for the free fallback
             },
           });
         }
