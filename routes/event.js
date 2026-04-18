@@ -62,13 +62,127 @@ router.post(
   },
 );
 
+// --- POST CHECK-IN (QR Code Scanner Endpoint) ---
+router.post("/checkin", verifyAuth, async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { ticketToken, eventId } = req.body;
+
+    if (!ticketToken || !eventId) {
+      return res
+        .status(400)
+        .json({ message: "Не указан токен билета или ID события." });
+    }
+
+    // 1. Verify Host Authorization
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return res.status(404).json({ message: "Событие не найдено." });
+
+    if (event.hostId !== hostId && req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "У вас нет прав для проверки билетов этого события.",
+      });
+    }
+
+    // 2. CHECK INVITATIONS (Free RSVPs)
+    const invitation = await prisma.invitation.findUnique({
+      where: { ticketToken: ticketToken },
+    });
+
+    if (invitation) {
+      if (invitation.eventId !== eventId) {
+        return res
+          .status(400)
+          .json({ message: "Этот билет от другого мероприятия!" });
+      }
+      if (invitation.status !== "ACCEPTED") {
+        return res
+          .status(400)
+          .json({ message: "Гость не подтвердил участие (Ожидание/Отказ)." });
+      }
+      if (invitation.isCheckedIn) {
+        const time = invitation.checkInTime
+          ? invitation.checkInTime.toLocaleTimeString("ru-RU")
+          : "ранее";
+        return res.status(400).json({ message: `Гость уже вошел в ${time}` });
+      }
+
+      await prisma.invitation.update({
+        where: { id: invitation.id },
+        data: { isCheckedIn: true, checkInTime: new Date() },
+      });
+
+      // Invalidate frontend cache so the attendees table updates instantly
+      if (typeof invalidateKeys === "function")
+        await invalidateKeys([`events:${eventId}:attendees`]);
+
+      return res.json({
+        isValid: true,
+        guestName: invitation.guestName,
+        message: "Вход разрешен!",
+      });
+    }
+
+    // 3. CHECK ORDERS (Paid Tickets)
+    const order = await prisma.order.findUnique({
+      where: { ticketCode: ticketToken },
+      include: { user: { select: { name: true } } },
+    });
+
+    if (order) {
+      if (order.eventId !== eventId) {
+        return res
+          .status(400)
+          .json({ message: "Этот билет от другого мероприятия!" });
+      }
+      if (order.status !== "ACTIVE" && order.status !== "PAYMENT_SUCCESS") {
+        return res
+          .status(400)
+          .json({ message: "Билет не оплачен или был отменен." });
+      }
+      if (order.isUsed) {
+        const time = order.enteredAt
+          ? order.enteredAt.toLocaleTimeString("ru-RU")
+          : "ранее";
+        return res
+          .status(400)
+          .json({ message: `Билет уже был использован в ${time}` });
+      }
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { isUsed: true, enteredAt: new Date() },
+      });
+
+      if (typeof invalidateKeys === "function")
+        await invalidateKeys([`events:${eventId}:attendees`]);
+
+      return res.json({
+        isValid: true,
+        guestName: order.user?.name || "Гость",
+        message: "Вход разрешен!",
+      });
+    }
+
+    // 4. IF NEITHER MATCHED
+    return res.status(404).json({
+      message: "Билет с таким QR-кодом не найден в базе этого события.",
+    });
+  } catch (error) {
+    console.error("Check-in Scanner Error:", error);
+    res
+      .status(500)
+      .json({ message: "Внутренняя ошибка сервера при сканировании билета." });
+  }
+});
+
 // --- 2. DYNAMIC ID ROUTES ---
 
 router.get("/", async (req, res) => {
   try {
     const dbQuery = () =>
       prisma.event.findMany({
-        where: { status: "active", type: "PUBLIC" },
+        where: { status: "active", type: "PUBLIC", paymentType: "PAID" },
         orderBy: { date: "asc" },
         include: {
           host: { select: { id: true, name: true, profile_picture: true } },
@@ -248,6 +362,80 @@ router.post("/:id/rsvp", async (req, res) => {
     res.json({ ticketToken: invitation.ticketToken, message: "RSVP принят" });
   } catch (error) {
     res.status(500).json({ message: "RSVP failed" });
+  }
+});
+
+// --- GET EVENT ATTENDEES (Unified RSVPs + Paid Orders) ---
+router.get("/:id/attendees", verifyAuth, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    // 1. Verify Event and Authorization
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!event) {
+      return res.status(404).json({ message: "Событие не найдено" });
+    }
+
+    if (event.hostId !== req.user.id && req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ message: "Нет прав для просмотра списка гостей" });
+    }
+
+    // 2. Fetch both Invitations (Free) and Orders (Paid) in parallel
+    const [invitations, orders] = await Promise.all([
+      prisma.invitation.findMany({
+        where: { eventId: eventId },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.order.findMany({
+        where: {
+          eventId: eventId,
+          status: { in: ["ACTIVE", "PAYMENT_SUCCESS"] }, // Only show successfully paid tickets
+        },
+        include: { user: { select: { name: true, email: true, phone: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    // 3. Map everything into the Unified Attendee Format for the frontend
+    const attendees = [
+      ...invitations.map((inv) => ({
+        id: inv.id,
+        eventId: inv.eventId,
+        guestName: inv.guestName || "Гость",
+        guestEmail: inv.guestEmail,
+        guestPhone: inv.guestPhone || null,
+        status: inv.status, // "PENDING", "ACCEPTED", "REJECTED"
+        ticketToken: inv.ticketToken,
+        isCheckedIn: inv.isCheckedIn,
+        checkInTime: inv.checkInTime,
+        createdAt: inv.createdAt,
+      })),
+      ...orders.map((ord) => ({
+        id: ord.id,
+        eventId: ord.eventId,
+        guestName: ord.user?.name || "Гость",
+        guestEmail: ord.user?.email || "Нет email",
+        guestPhone: ord.user?.phone || null,
+        status: "ACCEPTED", // Paid tickets are inherently "Accepted"
+        ticketToken: ord.ticketCode,
+        isCheckedIn: ord.isUsed,
+        checkInTime: ord.enteredAt,
+        createdAt: ord.createdAt,
+      })),
+    ];
+
+    // Sort combined list so the newest entries are at the top
+    attendees.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json(attendees);
+  } catch (error) {
+    console.error("Fetch Attendees Error:", error);
+    res.status(500).json({ message: "Ошибка при загрузке списка гостей" });
   }
 });
 
