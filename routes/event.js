@@ -214,6 +214,115 @@ router.get("/:id", async (req, res) => {
 
 // --- 3. PURCHASE & RSVP (Crucial Fixes Here) ---
 
+// router.post("/:id/purchase", verifyAuth, async (req, res) => {
+//   const eventId = req.params.id;
+//   const ticketCount = parseInt(req.body.ticketCount);
+//   const userId = req.user.id;
+
+//   if (isNaN(ticketCount) || ticketCount <= 0) {
+//     return res
+//       .status(400)
+//       .json({ message: "Укажите корректное количество билетов" });
+//   }
+
+//   try {
+//     const user = await prisma.user.findUnique({ where: { id: userId } });
+//     if (!user) return res.status(404).json({ message: "User not found" });
+
+//     // Step 1: Secure DB Transaction
+//     const result = await prisma.$transaction(async (tx) => {
+//       const targetEvent = await tx.event.findUnique({ where: { id: eventId } });
+
+//       if (!targetEvent) throw new Error("EVENT_NOT_FOUND");
+//       if (targetEvent.status !== "active") throw new Error("EVENT_NOT_ACTIVE");
+//       if (targetEvent.paymentType === "FREE") throw new Error("EVENT_IS_FREE"); // Prevent Tinkoff crash on 0 amount
+//       if (targetEvent.availableTickets < ticketCount)
+//         throw new Error("NOT_ENOUGH_TICKETS");
+//       if (targetEvent.hostId === userId) throw new Error("OWN_EVENT_PURCHASE");
+
+//       const totalPrice = targetEvent.price * ticketCount;
+
+//       // Reserve Inventory
+//       await tx.event.update({
+//         where: { id: eventId },
+//         data: { availableTickets: { decrement: ticketCount } },
+//       });
+
+//       const newOrder = await tx.order.create({
+//         data: { eventId, userId, ticketCount, totalPrice, status: "INITIATED" },
+//       });
+
+//       const newPayment = await tx.payment.create({
+//         data: {
+//           userId,
+//           amount: totalPrice,
+//           provider: "tinkoff",
+//           status: "PENDING",
+//           metadata: { type: "EVENT_TICKET", orderId: newOrder.id, eventId },
+//         },
+//       });
+
+//       return { newOrder, targetEvent, newPayment };
+//     });
+
+//     // Step 2: Tinkoff API Call (with Receipt data integration)
+//     try {
+//       const paymentData = await initTinkoffEventTicketPayment(
+//         result.newOrder,
+//         result.targetEvent,
+//         user.email,
+//       );
+
+//       // Update Tx IDs
+//       const tinkoffTxId = String(paymentData.paymentId);
+//       await prisma.$transaction([
+//         prisma.order.update({
+//           where: { id: result.newOrder.id },
+//           data: { paymentId: tinkoffTxId },
+//         }),
+//         prisma.payment.update({
+//           where: { id: result.newPayment.id },
+//           data: { providerTxId: tinkoffTxId },
+//         }),
+//       ]);
+
+//       await invalidateKeys(["events:all", `events:${eventId}`, "orders:my"]);
+//       return res.json({ paymentUrl: paymentData.paymentUrl });
+//     } catch (apiError) {
+//       console.error("Tinkoff API Error, performing manual rollback...");
+//       // Critical: If Tinkoff fails, restore the tickets and mark failure
+//       await prisma.$transaction([
+//         prisma.event.update({
+//           where: { id: eventId },
+//           data: { availableTickets: { increment: ticketCount } },
+//         }),
+//         prisma.order.update({
+//           where: { id: result.newOrder.id },
+//           data: { status: "PAYMENT_FAILED" },
+//         }),
+//         prisma.payment.update({
+//           where: { id: result.newPayment.id },
+//           data: { status: "FAILED" },
+//         }),
+//       ]);
+//       return res.status(502).json({
+//         message: "Сервис оплаты временно недоступен. Попробуйте позже.",
+//       });
+//     }
+//   } catch (error) {
+//     const errorMap = {
+//       EVENT_NOT_FOUND: "Событие не найдено",
+//       EVENT_NOT_ACTIVE: "Мероприятие более не доступно",
+//       EVENT_IS_FREE: "Это мероприятие бесплатное, используйте RSVP",
+//       NOT_ENOUGH_TICKETS: "Недостаточно свободных билетов",
+//       OWN_EVENT_PURCHASE: "Нельзя купить билет на собственное событие",
+//     };
+//     res
+//       .status(400)
+//       .json({ message: errorMap[error.message] || "Ошибка создания заказа" });
+//   }
+// });
+
 router.post("/:id/purchase", verifyAuth, async (req, res) => {
   const eventId = req.params.id;
   const ticketCount = parseInt(req.body.ticketCount);
@@ -235,12 +344,18 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
 
       if (!targetEvent) throw new Error("EVENT_NOT_FOUND");
       if (targetEvent.status !== "active") throw new Error("EVENT_NOT_ACTIVE");
-      if (targetEvent.paymentType === "FREE") throw new Error("EVENT_IS_FREE"); // Prevent Tinkoff crash on 0 amount
+      if (targetEvent.paymentType === "FREE") throw new Error("EVENT_IS_FREE");
       if (targetEvent.availableTickets < ticketCount)
         throw new Error("NOT_ENOUGH_TICKETS");
       if (targetEvent.hostId === userId) throw new Error("OWN_EVENT_PURCHASE");
 
-      const totalPrice = targetEvent.price * ticketCount;
+      // 🚨 UPDATE: Calculate effective price prioritizing discountPrice
+      const effectivePrice =
+        targetEvent.discountPrice && targetEvent.discountPrice > 0
+          ? targetEvent.discountPrice
+          : targetEvent.price;
+
+      const totalPrice = effectivePrice * ticketCount;
 
       // Reserve Inventory
       await tx.event.update({
@@ -286,7 +401,10 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
         }),
       ]);
 
-      await invalidateKeys(["events:all", `events:${eventId}`, "orders:my"]);
+      if (typeof invalidateKeys === "function") {
+        await invalidateKeys(["events:all", `events:${eventId}`, "orders:my"]);
+      }
+
       return res.json({ paymentUrl: paymentData.paymentUrl });
     } catch (apiError) {
       console.error("Tinkoff API Error, performing manual rollback...");
@@ -317,9 +435,8 @@ router.post("/:id/purchase", verifyAuth, async (req, res) => {
       NOT_ENOUGH_TICKETS: "Недостаточно свободных билетов",
       OWN_EVENT_PURCHASE: "Нельзя купить билет на собственное событие",
     };
-    res
-      .status(400)
-      .json({ message: errorMap[error.message] || "Ошибка создания заказа" });
+    const mappedMessage = errorMap[error.message] || "Ошибка создания заказа";
+    res.status(400).json({ message: mappedMessage });
   }
 });
 

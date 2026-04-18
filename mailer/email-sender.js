@@ -346,7 +346,7 @@ const sendSubscriptionReceiptEmail = async (
 ) => {
   try {
     // 1. Read the HTML template
-    const templatePath = path.join(
+    const templatePath = join(
       __dirname,
       "templates",
       "subscription-receipt-email.html",
