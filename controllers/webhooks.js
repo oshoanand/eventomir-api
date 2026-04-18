@@ -246,7 +246,7 @@ export const handleTinkoffWebhook = async (req, res) => {
     // ----------------------------------------------------------------
     const orderId = payload.OrderId;
     const status = payload.Status;
-    const actualAmountRubles = payload.Amount / 100; // Convert kopecks to rubles
+    const actualAmountRubles = payload.Amount / 100;
 
     const payment = await prisma.payment.findUnique({
       where: { id: orderId },
@@ -385,7 +385,7 @@ export const handleTinkoffWebhook = async (req, res) => {
         console.log(
           `✅ Subscription [${plan?.name}] activated for user ${payment.userId}`,
         );
-
+        console.log(payment, plan, actualAmountRubles, interval);
         // Non-blocking PDF & Email execution
         processSubscriptionDelivery(
           payment,
@@ -524,6 +524,7 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
 async function processSubscriptionDelivery(payment, plan, amount, interval) {
   try {
     console.log(`Generating Subscription PDF for: ${payment.user.email}`);
+    console.log(payment, plan, amount, interval);
     const pdfBuffer = await generateSubscriptionReceiptPDF(
       payment,
       payment.user,
