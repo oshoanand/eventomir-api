@@ -330,7 +330,7 @@ const sendSubscriptionReceiptEmail = async (
 
     // 3. Send the email
     const info = await transporter.sendMail({
-      from: `"Eventomir" <${process.env.SMTP_FROM_EMAIL || "noreply@eventomir.ru"}>`,
+      from: `"Eventomir" <${process.env.EMAIL_USER || "noreply@eventomir.ru"}>`,
       to: toEmail,
       subject: `Квитанция об оплате подписки: ${planName}`,
       html: htmlTemplate,
