@@ -385,7 +385,7 @@ export const handleTinkoffWebhook = async (req, res) => {
         console.log(
           `✅ Subscription [${plan?.name}] activated for user ${payment.userId}`,
         );
-        console.log(payment, plan, actualAmountRubles, interval);
+
         // Non-blocking PDF & Email execution
         processSubscriptionDelivery(
           payment,
@@ -521,26 +521,72 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
 /**
  * Generates and emails the subscription receipt PDF without blocking the response.
  */
+// async function processSubscriptionDelivery(payment, plan, amount, interval) {
+//   try {
+//     console.log(`Generating Subscription PDF for: ${payment.user.email}`);
+
+//     const pdfBuffer = await generateSubscriptionReceiptPDF(
+//       payment,
+//       payment.user,
+//       plan,
+//       amount,
+//       interval,
+//     );
+
+//     await sendSubscriptionReceiptEmail(
+//       payment.user.email,
+//       payment.user.name,
+//       plan?.name || "Premium",
+//       pdfBuffer,
+//     );
+//     console.log(`✅ Subscription email sent to: ${payment.user.email}`);
+//   } catch (error) {
+//     throw error;
+//   }
+// }
+
+// Add import at the top of the file if not already there
+// import prisma from "../libs/prisma.js";
+
 async function processSubscriptionDelivery(payment, plan, amount, interval) {
   try {
-    console.log(`Generating Subscription PDF for: ${payment.user.email}`);
-    console.log(payment, plan, amount, interval);
+    // 🚨 ROBUST FIX: If payment.user is undefined, fetch the user from DB!
+    let targetUser = payment.user;
+    if (!targetUser && payment.userId) {
+      targetUser = await prisma.user.findUnique({
+        where: { id: payment.userId },
+      });
+      // Attach it to the payment object in case the PDF generator needs it structured this way
+      payment.user = targetUser;
+    }
+
+    if (!targetUser || !targetUser.email) {
+      throw new Error(
+        `Cannot send email: User or User Email not found for payment ${payment.id}`,
+      );
+    }
+
+    console.log(`Generating Subscription PDF for: ${targetUser.email}`);
+
     const pdfBuffer = await generateSubscriptionReceiptPDF(
       payment,
-      payment.user,
+      targetUser, // Pass the safely fetched user
       plan,
       amount,
       interval,
     );
 
     await sendSubscriptionReceiptEmail(
-      payment.user.email,
-      payment.user.name,
+      targetUser.email,
+      targetUser.name,
       plan?.name || "Premium",
+      amount, // 🚨 FIX: Pass the amount to the email function
       pdfBuffer,
     );
-    console.log(`✅ Subscription email sent to: ${payment.user.email}`);
+
+    console.log(`✅ Subscription email sent to: ${targetUser.email}`);
   } catch (error) {
+    console.error("❌ processSubscriptionDelivery error:", error);
     throw error;
   }
 }

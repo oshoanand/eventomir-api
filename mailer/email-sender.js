@@ -298,54 +298,16 @@ const sendTicketEmail = async (toEmail, userName, eventName, pdfBuffer) => {
 //  * @param {string} planName - The name of the purchased subscription plan.
 //  * @param {Buffer} pdfBuffer - The generated PDF receipt in memory.
 //  */
-// const sendSubscriptionReceiptEmail = async (
-//   toEmail,
-//   userName,
-//   planName,
-//   pdfBuffer,
-// ) => {
-//   try {
-//     // Note: You must create a 'subscription-receipt-email.html' inside your templates folder.
-//     const htmlEmail = getTemplate("subscription-receipt-email", {
-//       name: userName || "Пользователь",
-//       planName: planName,
-//     });
-
-//     const mailOptions = {
-//       from: `"Eventomir Billing" <${process.env.EMAIL_USER}>`,
-//       to: toEmail,
-//       subject: `Ваша квитанция об оплате подписки: ${planName}`,
-//       html: htmlEmail,
-//       attachments: [
-//         {
-//           filename: `Receipt_${planName.replace(/\s+/g, "_")}.pdf`,
-//           content: pdfBuffer, // Attach the memory buffer directly
-//           contentType: "application/pdf",
-//         },
-//       ],
-//     };
-
-//     const info = await transporter.sendMail(mailOptions);
-//     console.log(
-//       `Subscription receipt email sent to ${toEmail}. Message ID: ${info.messageId}`,
-//     );
-
-//     return true;
-//   } catch (error) {
-//     console.error("Error in sendSubscriptionReceiptEmail:", error);
-//     // Return false so we don't crash the webhook if email fails
-//     return false;
-//   }
-// };
 
 const sendSubscriptionReceiptEmail = async (
   toEmail,
   userName,
   planName,
+  amount,
   pdfBuffer,
 ) => {
   try {
-    // 1. Read the HTML template
+    // 1. Read the HTML template (using path.join for safety)
     const templatePath = join(
       __dirname,
       "templates",
@@ -356,12 +318,15 @@ const sendSubscriptionReceiptEmail = async (
     // 2. Replace placeholders with actual data
     const dashboardUrl = `${process.env.WEB_APP_URL || "https://app.eventomir.ru"}/pricing`;
 
+    // 🚨 Safe parsing for the amount
+    const safeAmount = Number(amount) || 0;
+
     htmlTemplate = htmlTemplate
       .replace(/{{userName}}/g, userName || "Пользователь")
       .replace(/{{planName}}/g, planName)
-      .replace(/{{amount}}/g, amount.toLocaleString("ru-RU"))
+      .replace(/{{amount}}/g, safeAmount.toLocaleString("ru-RU")) // 🚨 Now has access to amount
       .replace(/{{dashboardUrl}}/g, dashboardUrl)
-      .replace(/{{year}}/g, new Date().getFullYear());
+      .replace(/{{year}}/g, new Date().getFullYear().toString());
 
     // 3. Send the email
     const info = await transporter.sendMail({
@@ -385,7 +350,6 @@ const sendSubscriptionReceiptEmail = async (
     throw error;
   }
 };
-
 export {
   sendVerificationEmail,
   sendModerationStatusEmail,
