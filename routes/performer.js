@@ -486,7 +486,7 @@ router.post(
         { "Content-Type": req.file.mimetype },
       );
 
-      const fileUrl = `${MINIO_PUBLIC_URL}/${MINIO_BUCKET_NAME}/${fileKey}`;
+      const fileUrl = `${MINIO_PUBLIC_URL}/${fileKey}`;
 
       const track = await prisma.audioTrack.create({
         data: {
