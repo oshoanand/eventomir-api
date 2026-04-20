@@ -1,44 +1,78 @@
 // import crypto from "crypto";
 // import "dotenv/config";
 
-// const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8080";
+// const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8800";
 // const TINKOFF_TERMINAL_KEY = process.env.TINKOFF_TERMINAL_KEY;
 // const TINKOFF_PASSWORD = process.env.TINKOFF_PASSWORD;
 // const TINKOFF_API_URL = "https://securepay.tinkoff.ru/v2";
-// // const TINKOFF_API_URL = "https://rest-api-test.tinkoff.ru/v2";
 // const APP_URL = process.env.WEB_APP_URL || "http://localhost:3000";
 
 // /**
-//  * Generates the SHA-256 token required by Tinkoff
+//  * Robust SHA-256 token generator for Tinkoff.
+//  * Strictly follows the sorting and filtering rules.
 //  */
 // export const generateTinkoffToken = (data) => {
-//   // 1. Filter out specific fields according to Tinkoff docs
-//   const keys = Object.keys(data).filter(
-//     (k) => !["Token", "Receipt", "DATA"].includes(k),
+//   const params = { ...data, Password: TINKOFF_PASSWORD };
+
+//   // 1. Filter out fields that SHOULD NOT be part of the signature
+//   // DATA, Receipt, and Token are excluded. Tinkoff only hashes flat values.
+//   // Also strip null/undefined values to prevent hashing literal "undefined"
+//   const keys = Object.keys(params).filter(
+//     (key) =>
+//       !["Token", "Receipt", "DATA"].includes(key) &&
+//       params[key] !== undefined &&
+//       params[key] !== null,
 //   );
 
-//   // 2. Add Password to the list of keys
-//   const dataWithPassword = { ...data, Password: TINKOFF_PASSWORD };
-//   keys.push("Password");
-
-//   // 3. Sort alphabetically
+//   // 2. Sort keys alphabetically
 //   keys.sort();
 
-//   // 4. Concatenate values
-//   let concatenatedValues = "";
-//   for (const key of keys) {
-//     // Tinkoff expects string values for the hash
-//     if (dataWithPassword[key] !== undefined && dataWithPassword[key] !== null) {
-//       concatenatedValues += String(dataWithPassword[key]);
-//     }
-//   }
+//   // 3. Concatenate values of those keys as strings
+//   const concatenatedValues = keys
+//     .map((key) => {
+//       // Booleans must be explicitly stringified for Tinkoff
+//       if (typeof params[key] === "boolean") {
+//         return params[key] ? "true" : "false";
+//       }
+//       return String(params[key]);
+//     })
+//     .join("");
 
-//   // 5. Hash with SHA-256
+//   // 4. SHA-256 Hash
 //   return crypto.createHash("sha256").update(concatenatedValues).digest("hex");
 // };
 
 // /**
-//  * Initializes a payment session with Tinkoff
+//  * Internal helper to send requests to Tinkoff API
+//  */
+// async function callTinkoff(endpoint, payload) {
+//   // Generate token right before sending to ensure all fields are included
+//   payload.Token = generateTinkoffToken(payload);
+
+//   try {
+//     const response = await fetch(`${TINKOFF_API_URL}${endpoint}`, {
+//       method: "POST",
+//       headers: { "Content-Type": "application/json" },
+//       body: JSON.stringify(payload),
+//     });
+
+//     const result = await response.json();
+
+//     if (!result.Success) {
+//       console.error(`Tinkoff ${endpoint} Error:`, result);
+//       throw new Error(result.Details || result.Message || "Tinkoff API Error");
+//     }
+
+//     return result;
+//   } catch (error) {
+//     console.error(`Tinkoff Connection Error (${endpoint}):`, error.message);
+//     throw error;
+//   }
+// }
+
+// /**
+//  * Initializes a payment session for Event Tickets
+//  * Includes mandatory Receipt object for FZ-54 compliance.
 //  */
 // export const initTinkoffEventTicketPayment = async (
 //   order,
@@ -53,33 +87,30 @@
 //     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff-event-ticket`,
 //     SuccessURL: `${APP_URL}/tickets?payment=success`,
 //     FailURL: `${APP_URL}/events/${event.id}?payment=failed`,
-//     DATA: {
+//     DATA: { Email: userEmail },
+//     Receipt: {
 //       Email: userEmail,
+//       Taxation: "usn_income",
+//       Items: [
+//         {
+//           Name: `Билет: ${event.title.substring(0, 64)}`, // Tinkoff Item Name max length is 64 chars
+//           Price: Math.round(event.price * 100),
+//           Quantity: order.ticketCount,
+//           Amount: Math.round(order.totalPrice * 100),
+//           PaymentMethod: "full_prepayment",
+//           PaymentObject: "service",
+//           Tax: "none",
+//         },
+//       ],
 //     },
 //   };
 
-//   payload.Token = generateTinkoffToken(payload);
-
-//   const response = await fetch(`${TINKOFF_API_URL}/Init`, {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify(payload),
-//   });
-
-//   const result = await response.json();
-
-//   if (!result.Success) {
-//     throw new Error(result.Message || "Failed to initialize Tinkoff payment");
-//   }
-
-//   return {
-//     paymentUrl: result.PaymentURL,
-//     paymentId: result.PaymentId,
-//   };
+//   const result = await callTinkoff("/Init", payload);
+//   return { paymentUrl: result.PaymentURL, paymentId: result.PaymentId };
 // };
 
 // /**
-//  * Initializes a payment session with Tinkoff specifically for Paid Requests
+//  * Initializes payment for Request Postings
 //  */
 // export const initTinkoffRequestPayment = async (
 //   paymentId,
@@ -89,39 +120,36 @@
 // ) => {
 //   const payload = {
 //     TerminalKey: TINKOFF_TERMINAL_KEY,
-//     Amount: Math.round(amount * 100), // Tinkoff expects kopecks (cents)
-//     OrderId: paymentId, // We use your DB Payment ID as the OrderId
+//     Amount: Math.round(amount * 100),
+//     OrderId: paymentId,
 //     Description: `Оплата публикации заявки: ${category}`,
-//     NotificationURL: `${process.env.API_BASE_URL}/api/webhooks/tinkoff`,
+//     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
 //     SuccessURL: `${APP_URL}/customer-profile?payment=success`,
 //     FailURL: `${APP_URL}/create-request?payment=failed`,
-//     DATA: {
+//     DATA: { Email: userEmail },
+//     Receipt: {
 //       Email: userEmail,
+//       Taxation: "usn_income",
+//       Items: [
+//         {
+//           Name: `Публикация заявки: ${category.substring(0, 45)}`,
+//           Price: Math.round(amount * 100),
+//           Quantity: 1,
+//           Amount: Math.round(amount * 100),
+//           PaymentMethod: "full_prepayment",
+//           PaymentObject: "service",
+//           Tax: "none",
+//         },
+//       ],
 //     },
 //   };
 
-//   payload.Token = generateTinkoffToken(payload);
-
-//   const response = await fetch(`${TINKOFF_API_URL}/Init`, {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify(payload),
-//   });
-
-//   const result = await response.json();
-
-//   if (!result.Success) {
-//     throw new Error(result.Message || "Failed to initialize Tinkoff payment");
-//   }
-
-//   return {
-//     paymentUrl: result.PaymentURL,
-//     paymentId: result.PaymentId,
-//   };
+//   const result = await callTinkoff("/Init", payload);
+//   return { paymentUrl: result.PaymentURL, paymentId: result.PaymentId };
 // };
 
 // /**
-//  * Initializes a payment session with Tinkoff specifically for Wallet Top-Ups
+//  * Wallet Top-Up logic
 //  */
 // export const initTinkoffTopUpPayment = async (
 //   paymentId,
@@ -133,44 +161,34 @@
 //     TerminalKey: TINKOFF_TERMINAL_KEY,
 //     Amount: Math.round(amount * 100),
 //     OrderId: paymentId,
-//     Description: `Пополнение кошелька на ${amount} руб.`,
+//     Description: `Пополнение кошелька`,
 //     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
-//     SuccessURL:
-//       userType === "customer"
-//         ? `${APP_URL}/customer-profile?topup=success`
-//         : `${APP_URL}/performer-profile?topup=success`,
-//     FailURL:
-//       userType === "customer"
-//         ? `${APP_URL}/customer-profile?topup=failed`
-//         : `${APP_URL}/performer-profile?topup=failed`,
-//     DATA: {
+//     SuccessURL: `${APP_URL}/${userType}-profile?topup=success`,
+//     FailURL: `${APP_URL}/${userType}-profile?topup=failed`,
+//     DATA: { Email: userEmail },
+//     Receipt: {
 //       Email: userEmail,
+//       Taxation: "usn_income",
+//       Items: [
+//         {
+//           Name: "Пополнение баланса",
+//           Price: Math.round(amount * 100),
+//           Quantity: 1,
+//           Amount: Math.round(amount * 100),
+//           PaymentMethod: "advance", // Use 'advance' or 'payment' for top-ups
+//           PaymentObject: "payment",
+//           Tax: "none",
+//         },
+//       ],
 //     },
 //   };
 
-//   payload.Token = generateTinkoffToken(payload);
-//   const response = await fetch(`${TINKOFF_API_URL}/Init`, {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify(payload),
-//   });
-
-//   const result = await response.json();
-
-//   if (!result.Success) {
-//     throw new Error(
-//       result.Message || "Failed to initialize Tinkoff top-up payment",
-//     );
-//   }
-
-//   return {
-//     paymentUrl: result.PaymentURL,
-//     paymentId: result.PaymentId,
-//   };
+//   const result = await callTinkoff("/Init", payload);
+//   return { paymentUrl: result.PaymentURL, paymentId: result.PaymentId };
 // };
 
 // /**
-//  * Initializes a payment session with Tinkoff specifically for Subscriptions
+//  * Subscription payment logic
 //  */
 // export const initTinkoffSubscriptionPayment = async (
 //   paymentId,
@@ -186,34 +204,30 @@
 //     TerminalKey: TINKOFF_TERMINAL_KEY,
 //     Amount: Math.round(amount * 100),
 //     OrderId: paymentId,
-//     Description: `Подписка на тариф «${planName}» (${periodLabel})`,
+//     Description: `Подписка «${planName}» (${periodLabel})`,
 //     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
 //     SuccessURL: `${APP_URL}/pricing?subscription=success`,
 //     FailURL: `${APP_URL}/pricing?subscription=failed`,
-//     DATA: {
+//     DATA: { Email: userEmail },
+//     Receipt: {
 //       Email: userEmail,
+//       Taxation: "usn_income",
+//       Items: [
+//         {
+//           Name: `Тариф: ${planName.substring(0, 50)}`,
+//           Price: Math.round(amount * 100),
+//           Quantity: 1,
+//           Amount: Math.round(amount * 100),
+//           PaymentMethod: "full_prepayment",
+//           PaymentObject: "service",
+//           Tax: "none",
+//         },
+//       ],
 //     },
 //   };
 
-//   payload.Token = generateTinkoffToken(payload);
-//   const response = await fetch(`${TINKOFF_API_URL}/Init`, {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify(payload),
-//   });
-
-//   const result = await response.json();
-
-//   if (!result.Success) {
-//     throw new Error(
-//       result.Message || "Failed to initialize Tinkoff subscription payment",
-//     );
-//   }
-
-//   return {
-//     paymentUrl: result.PaymentURL,
-//     paymentId: result.PaymentId,
-//   };
+//   const result = await callTinkoff("/Init", payload);
+//   return { paymentUrl: result.PaymentURL, paymentId: result.PaymentId };
 // };
 
 import crypto from "crypto";
@@ -233,8 +247,6 @@ export const generateTinkoffToken = (data) => {
   const params = { ...data, Password: TINKOFF_PASSWORD };
 
   // 1. Filter out fields that SHOULD NOT be part of the signature
-  // DATA, Receipt, and Token are excluded. Tinkoff only hashes flat values.
-  // Also strip null/undefined values to prevent hashing literal "undefined"
   const keys = Object.keys(params).filter(
     (key) =>
       !["Token", "Receipt", "DATA"].includes(key) &&
@@ -297,9 +309,15 @@ export const initTinkoffEventTicketPayment = async (
   event,
   userEmail,
 ) => {
+  // 🚨 FIX: Safe unit price calculation (prevents fractional kopeck errors)
+  const unitPriceInKopecks = Math.round(
+    (order.totalPrice / order.ticketCount) * 100,
+  );
+  const totalAmountInKopecks = Math.round(order.totalPrice * 100);
+
   const payload = {
     TerminalKey: TINKOFF_TERMINAL_KEY,
-    Amount: Math.round(order.totalPrice * 100),
+    Amount: totalAmountInKopecks,
     OrderId: order.id,
     Description: `Билеты на: ${event.title}`,
     NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff-event-ticket`,
@@ -311,10 +329,10 @@ export const initTinkoffEventTicketPayment = async (
       Taxation: "usn_income",
       Items: [
         {
-          Name: `Билет: ${event.title.substring(0, 64)}`, // Tinkoff Item Name max length is 64 chars
-          Price: Math.round(event.price * 100),
+          Name: `Билет: ${event.title.substring(0, 64)}`,
+          Price: unitPriceInKopecks,
           Quantity: order.ticketCount,
-          Amount: Math.round(order.totalPrice * 100),
+          Amount: totalAmountInKopecks,
           PaymentMethod: "full_prepayment",
           PaymentObject: "service",
           Tax: "none",
@@ -393,7 +411,7 @@ export const initTinkoffTopUpPayment = async (
           Price: Math.round(amount * 100),
           Quantity: 1,
           Amount: Math.round(amount * 100),
-          PaymentMethod: "advance", // Use 'advance' or 'payment' for top-ups
+          PaymentMethod: "advance",
           PaymentObject: "payment",
           Tax: "none",
         },
@@ -446,4 +464,54 @@ export const initTinkoffSubscriptionPayment = async (
 
   const result = await callTinkoff("/Init", payload);
   return { paymentUrl: result.PaymentURL, paymentId: result.PaymentId };
+};
+
+/**
+ * NEW: Initializes a B2B payment session with Tinkoff.
+ * Used for corporate clients paying via Tinkoff's B2B invoicing link.
+ */
+export const initTinkoffB2BPayment = async (
+  order,
+  company,
+  plan,
+  userEmail,
+) => {
+  const amountInKopecks = Math.round(order.amount * 100);
+
+  const payload = {
+    TerminalKey: TINKOFF_TERMINAL_KEY,
+    Amount: amountInKopecks,
+    OrderId: order.id,
+    Description: `Оплата B2B подписки: ${plan.name} по счету-договору`,
+    NotificationURL: `${API_BASE_URL}/api/webhooks/tinkoff`,
+    SuccessURL: `${APP_URL}/pricing?b2b_payment=success`,
+    FailURL: `${APP_URL}/pricing?b2b_payment=failed`,
+    DATA: { Email: userEmail },
+    Receipt: {
+      Email: userEmail,
+      Taxation: "usn_income",
+      Items: [
+        {
+          Name: `Подписка на тариф ${plan.name.substring(0, 40)}`,
+          Price: amountInKopecks,
+          Quantity: 1,
+          Amount: amountInKopecks,
+          PaymentMethod: "full_prepayment",
+          PaymentObject: "service",
+          Tax: "none",
+          SupplierInfo: {
+            Name: company.company_name || company.name || "ООО Клиент",
+            Inn: company.inn,
+          },
+        },
+      ],
+    },
+  };
+
+  const result = await callTinkoff("/Init", payload);
+
+  return {
+    paymentUrl: result.PaymentURL,
+    paymentId: result.PaymentId,
+  };
 };

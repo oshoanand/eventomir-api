@@ -1,5 +1,7 @@
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
+import fs from "fs";
+import path from "path";
 
 /**
  * Generates a PDF ticket in memory and returns it as a Buffer.
@@ -403,6 +405,212 @@ export const generateSubscriptionReceiptPDF = async (
         align: "center",
         width: 495,
       });
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+// export const generateB2BInvoicePDF = (order, user, plan) => {
+//   return new Promise((resolve, reject) => {
+//     try {
+//       const doc = new PDFDocument({ margin: 50 });
+//       const buffers = [];
+
+//       doc.on("data", buffers.push.bind(buffers));
+//       doc.on("end", () => resolve(Buffer.concat(buffers)));
+
+//       // Для поддержки кириллицы необходимо загрузить свой шрифт
+//       // doc.font("path/to/Roboto-Regular.ttf");
+
+//       // 1. Реквизиты поставщика (Ваша компания)
+//       doc
+//         .fontSize(14)
+//         .text(
+//           "Внимание! Оплата данного счета означает согласие с условиями оферты.",
+//           { align: "center" },
+//         );
+//       doc.moveDown();
+
+//       // Таблица реквизитов (упрощенный пример)
+//       doc.fontSize(10);
+//       doc.text(`Организация: ООО "АМУЛЕТ КОМПАНИ"`);
+//       doc.text(`ИНН: 6319258622`);
+//       doc.text(`ОГРН: 1226300038360`);
+//       doc.text(`КПП: 1226300038360`);
+//       doc.text(`Расчетный счет: 40702810000000000000 `);
+//       doc.text(`Наименование банка: АО "ТИНЬКОФФ БАНК"`);
+//       doc.text(`БИК: 044525974 `);
+//       doc.moveDown();
+
+//       // 2. Заголовок счета
+//       doc
+//         .fontSize(16)
+//         .text(
+//           `СЧЕТ НА ОПЛАТУ № ${order.invoiceNumber} от ${new Date().toLocaleDateString("ru-RU")}`,
+//           { align: "center" },
+//         );
+//       doc.moveDown();
+
+//       // 3. Реквизиты покупателя
+//       doc.fontSize(10);
+//       doc.text(`ПОКУПАТЕЛЬ: ${user.company_name} (ИНН: ${user.inn})`);
+//       doc.text(`Адрес: ${user.city || "Не указан"}`);
+//       doc.moveDown();
+
+//       // 4. Позиции счета (Таблица)
+//       const vatAmount = order.amount * 0.2; // НДС 20%
+//       const amountWithoutVat = order.amount - vatAmount;
+
+//       doc.text(`Наименование: Подписка "${plan.name}"`);
+//       doc.text(`Количество: 1 шт.`);
+//       doc.text(`Сумма без НДС: ${amountWithoutVat.toFixed(2)} руб.`);
+//       doc.text(`НДС (20%): ${vatAmount.toFixed(2)} руб.`);
+//       doc.text(`Итого к оплате: ${order.amount.toFixed(2)} руб.`);
+//       doc.moveDown();
+
+//       // Назначение платежа (КРИТИЧНО ДЛЯ ВЕБХУКОВ)
+//       doc
+//         .font("Helvetica-Bold")
+//         .text(
+//           `Назначение платежа: Оплата по счету № ${order.invoiceNumber} за услуги платформы. Без НДС / В т.ч. НДС ${vatAmount.toFixed(2)} руб.`,
+//         );
+
+//       // 5. Подписи и печати (можно вставить изображения)
+//       // doc.image("path/to/stamp.png", 100, 600, { width: 100 });
+
+//       doc.end();
+//     } catch (error) {
+//       reject(error);
+//     }
+//   });
+// };
+
+export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ margin: 50 });
+      const buffers = [];
+
+      doc.on("data", buffers.push.bind(buffers));
+      doc.on("end", () => resolve(Buffer.concat(buffers)));
+
+      // ----------------------------------------------------------------
+      // 1. ROBUST FONT LOADING FOR CYRILLIC SUPPORT
+      // ----------------------------------------------------------------
+      // process.cwd() ensures the path works in production (e.g., Vercel/Docker)
+      const fontsDir = path.join(process.cwd(), "public", "fonts");
+      const regularFontPath = path.join(fontsDir, "Roboto-Regular.ttf");
+      const boldFontPath = path.join(fontsDir, "Roboto-Bold.ttf");
+
+      // Defensive check to prevent silent PDF crashes if fonts are missing
+      if (!fs.existsSync(regularFontPath) || !fs.existsSync(boldFontPath)) {
+        console.error(
+          "🚨 PDF Generation Error: Fonts missing in public/fonts/",
+        );
+        console.error(
+          `Checked Paths:\n- ${regularFontPath}\n- ${boldFontPath}`,
+        );
+        throw new Error(
+          "Не удалось загрузить шрифты (Roboto) для генерации PDF-счета. Пожалуйста, убедитесь, что они находятся в папке public/fonts/.",
+        );
+      }
+
+      // Register fonts with clean aliases
+      doc.registerFont("Roboto", regularFontPath);
+      doc.registerFont("Roboto-Bold", boldFontPath);
+
+      // Set default font to our registered Regular font
+      doc.font("Roboto");
+
+      // ----------------------------------------------------------------
+      // 2. INVOICE HEADER & SUPPLIER REQUISITES
+      // ----------------------------------------------------------------
+      doc
+        .fontSize(14)
+        .text(
+          "Внимание! Оплата данного счета означает согласие с условиями оферты.",
+          { align: "center" },
+        );
+      doc.moveDown();
+
+      doc.fontSize(10);
+      doc.text(`Организация: ООО "АМУЛЕТ КОМПАНИ"`);
+      doc.text(`ИНН: 6319258622`);
+      doc.text(`ОГРН: 1226300038360`);
+      doc.text(`КПП: 1226300038360`);
+      doc.text(`Расчетный счет: 40702810000000000000`);
+      doc.text(`Наименование банка: АО "ТИНЬКОФФ БАНК"`);
+      doc.text(`БИК: 044525974`);
+      doc.moveDown();
+
+      // ----------------------------------------------------------------
+      // 3. INVOICE TITLE & NUMBER
+      // ----------------------------------------------------------------
+      // In our updated architecture, the B2B invoice number is stored in providerTxId
+      const invoiceNumber = paymentRecord.providerTxId;
+      const amount = paymentRecord.amount;
+
+      // Translate interval to Russian for the invoice line item
+      const intervalNames = {
+        month: "1 мес.",
+        half_year: "6 мес.",
+        year: "1 год",
+      };
+      const periodLabel = intervalNames[interval] || "период";
+
+      doc
+        .font("Roboto-Bold")
+        .fontSize(16)
+        .text(
+          `СЧЕТ НА ОПЛАТУ № ${invoiceNumber} от ${new Date().toLocaleDateString("ru-RU")}`,
+          { align: "center" },
+        );
+      doc.moveDown();
+
+      // ----------------------------------------------------------------
+      // 4. BUYER REQUISITES
+      // ----------------------------------------------------------------
+      doc.font("Roboto").fontSize(10);
+      doc.text(
+        `ПОКУПАТЕЛЬ: ${user.company_name || "Не указано"} (ИНН: ${user.inn || "Не указан"})`,
+      );
+      doc.text(`Адрес: ${user.city || "Не указан"}`);
+      doc.moveDown();
+
+      // ----------------------------------------------------------------
+      // 5. INVOICE ITEMS (TABLE REPLACEMENT)
+      // ----------------------------------------------------------------
+      const vatAmount = amount * 0.2; // 20% VAT
+      const amountWithoutVat = amount - vatAmount;
+
+      doc.text(
+        `Наименование: Корпоративная подписка "${plan.name}" (${periodLabel})`,
+      );
+      doc.text(`Количество: 1 шт.`);
+      doc.text(`Сумма без НДС: ${amountWithoutVat.toFixed(2)} руб.`);
+      doc.text(`НДС (20%): ${vatAmount.toFixed(2)} руб.`);
+
+      doc.font("Roboto-Bold");
+      doc.text(`Итого к оплате: ${amount.toFixed(2)} руб.`);
+      doc.moveDown();
+
+      // ----------------------------------------------------------------
+      // 6. PAYMENT PURPOSE (CRITICAL FOR BANK WEBHOOKS)
+      // ----------------------------------------------------------------
+      // The buyer MUST put this exact string in their wire transfer description
+      // so our webhook (handleTinkoffB2BSubscriptionPurchase) can parse the INV- number.
+      doc.text(
+        `Назначение платежа: Оплата по счету № ${invoiceNumber} за услуги платформы. В т.ч. НДС ${vatAmount.toFixed(2)} руб.`,
+      );
+
+      // Optional: Add Stamp/Signature images here
+      // const stampPath = path.join(process.cwd(), "public", "images", "stamp.png");
+      // if (fs.existsSync(stampPath)) {
+      //   doc.image(stampPath, 100, 600, { width: 100 });
+      // }
 
       doc.end();
     } catch (error) {

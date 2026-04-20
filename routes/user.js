@@ -20,6 +20,7 @@ router.get("/me", verifyAuth, async (req, res) => {
         name: true,
         email: true,
         role: true,
+        account_type: true,
         walletBalance: true,
         profile_picture: true,
         created_at: true,

@@ -19,19 +19,23 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Reads an HTML file and replaces placeholders
+ * Reads an HTML file and replaces placeholders safely
  */
 const getTemplate = (templateName, data) => {
   const templatePath = join(__dirname, "templates", `${templateName}.html`);
 
-  // Read the file synchronously (for simplicity in this context)
+  // Read the file synchronously
   let htmlContent = fs.readFileSync(templatePath, "utf8");
 
-  // Replace placeholders dynamically
-  // Example: replaces {{name}} with data.name
+  // Replace placeholders dynamically safely
   Object.keys(data).forEach((key) => {
-    const regex = new RegExp(`{{${key}}}`, "g"); // Create global regex for replacement
-    htmlContent = htmlContent.replace(regex, data[key]);
+    const regex = new RegExp(`{{${key}}}`, "g");
+
+    // Ensure we don't print "undefined" or "null" in the email
+    const replacementValue =
+      data[key] !== null && data[key] !== undefined ? data[key] : "";
+
+    htmlContent = htmlContent.replace(regex, replacementValue);
   });
 
   return htmlContent;
@@ -350,6 +354,45 @@ const sendSubscriptionReceiptEmail = async (
     throw error;
   }
 };
+
+// B2B Invoice Email
+const sendB2BInvoiceEmail = async (
+  toEmail,
+  companyName,
+  invoiceNumber,
+  pdfBuffer,
+) => {
+  try {
+    const htmlTemplate = getTemplate("invoice-b2b-email", {
+      companyName,
+      invoiceNumber,
+    });
+
+    const mailOptions = {
+      from: `"Eventomir Бухгалтерия" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `Счет на оплату № ${invoiceNumber}`,
+      html: htmlTemplate,
+      attachments: [
+        {
+          filename: `Счет_${invoiceNumber}.pdf`,
+          content: pdfBuffer,
+          contentType: "application/pdf",
+        },
+      ],
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(
+      `b2b invoice email sent to ${toEmail}. Message ID: ${info.messageId}`,
+    );
+    return info;
+  } catch (error) {
+    console.error("Error sending subscription invoice b2b email:", error);
+    throw error;
+  }
+};
+
 export {
   sendVerificationEmail,
   sendModerationStatusEmail,
@@ -358,4 +401,5 @@ export {
   sendPartnerApprovalEmail,
   sendTicketEmail,
   sendSubscriptionReceiptEmail,
+  sendB2BInvoiceEmail,
 };

@@ -38,6 +38,7 @@ import walletRoutes from "./routes/wallet.js";
 import webhookRoutes from "./routes/webhooks.js";
 import fcmRoutes from "./routes/fcm.js";
 import invitationRoutes from "./routes/invitation.js";
+import promoRoutes from "./routes/promo.js";
 
 dotenv.config();
 
@@ -134,6 +135,7 @@ async function initializeExpressServer() {
   app.use("/api/fcm", fcmRoutes);
   app.use("/api/webhooks", webhookRoutes);
   app.use("/api/invitations", invitationRoutes);
+  app.use("/api/promo-codes", promoRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;

@@ -70,13 +70,19 @@ enum WalletType {
 }
 
 enum OrderStatus {
-  INITIATED
+  INITIATED // Order created, waiting for user action
+  AWAITING_BANK_TRANSFER // NEW: B2B invoice generated, waiting for wire transfer
+  ACTIVE // Ticket is valid and ready to use
+  PAYMENT_SUCCESS // Payment cleared (alternative to ACTIVE depending on your logic)
+  PAYMENT_FAILED // Card declined or Tinkoff error
+  CANCELLED // Order manually cancelled or expired
   PAYMENT_PENDING
-  PAYMENT_FAILED
-  PAYMENT_SUCCESS
-  CANCELLED
-  ACTIVE
   EXPIRED
+}
+
+enum PaymentMethod {
+  CARD // Standard B2C Tinkoff acquiring
+  INVOICE // Standard B2B Wire Transfer (Оплата по счету)
 }
 
 enum TargetType {
@@ -111,6 +117,11 @@ enum RsvpStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FLAT
 }
 
 // ==========================================
@@ -204,9 +215,10 @@ model User {
   walletTransactions WalletTransaction[]
 
   // Relations for the universal chat
-  chatsAsUser1 ChatSession[] @relation("ChatUser1")
-  chatsAsUser2 ChatSession[] @relation("ChatUser2")
-  messagesSent ChatMessage[]
+  chatsAsUser1   ChatSession[] @relation("ChatUser1")
+  chatsAsUser2   ChatSession[] @relation("ChatUser2")
+  messagesSent   ChatMessage[]
+  usedPromoCodes PromoCode[]   @relation("PromoCodeUsers")
 }
 
 model Account {
@@ -483,23 +495,6 @@ model SubscriptionPlan {
   subscriptions UserSubscription[]
 }
 
-// model UserSubscription {
-//   id     String @id @default(uuid())
-//   userId String @unique
-//   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-//   planId String
-//   plan   SubscriptionPlan @relation(fields: [planId], references: [id])
-
-//   startDate DateTime  @default(now())
-//   endDate   DateTime?
-//   isActive  Boolean   @default(true)
-//   autoRenew Boolean   @default(false)
-
-//   createdAt DateTime @default(now())
-//   updatedAt DateTime @updatedAt
-// }
-
 model UserSubscription {
   id     String @id @default(uuid())
   userId String @unique
@@ -511,11 +506,17 @@ model UserSubscription {
   startDate DateTime  @default(now())
   endDate   DateTime?
 
-  // 🚨 FIX 1: Replaced 'isActive' Boolean with 'status' String to match the webhook logic
   status SubscriptionStatus @default(ACTIVE) // "ACTIVE", "EXPIRED", "CANCELLED"
 
-  // 🚨 FIX 2: Added pricePaid to store the transaction amount
   pricePaid Float?
+
+  // 🚨 NEW: Track the Promo Code used for this subscription cycle
+  promoCodeId String?
+  promoCode   PromoCode? @relation(fields: [promoCodeId], references: [id], onDelete: SetNull)
+
+  // 🚨 NEW: Store the exact discount amount applied at the time of purchase
+  // (Protects financial data if the PromoCode is later modified/deleted by an admin)
+  discountAmount Float?
 
   autoRenew Boolean @default(false)
 
@@ -609,23 +610,31 @@ model Invitation {
 }
 
 model Order {
-  id            String      @id @default(cuid())
-  eventId       String
-  event         Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  userId        String
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   ticketCount   Int
   totalPrice    Float
-  status        OrderStatus @default(INITIATED)
-  paymentId     String?
-  paymentMethod String      @default("card")
-  ticketCode    String      @unique @default(uuid()) // Embedded in the QR Code
-  isUsed        Boolean     @default(false) // Has the attendee scanned in?
-  enteredAt     DateTime? // Exact timestamp they entered
+  status        OrderStatus   @default(INITIATED)
+  paymentId     String? // Stores Tinkoff's internal PaymentId
+  paymentMethod PaymentMethod @default(CARD)
+
+  ticketCode String    @unique @default(uuid()) // Embedded in the QR Code
+  isUsed     Boolean   @default(false) // Has the attendee scanned in?
+  enteredAt  DateTime? // Exact timestamp they entered
+
+  // --- NEW: B2B Invoice Fields (ООО / ИП) ---
+  invoiceNumber String?   @unique // e.g., "INV-171353-991" (Null for B2C card payments)
+  dueDate       DateTime? // Deadline for the bank transfer (e.g., +5 days)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// 🚨 Add these Enums to the bottom of your schema.prisma file
 
 model Article {
   id               String   @id @default(uuid())
@@ -809,4 +818,25 @@ model AudioTrack {
   created_at   DateTime @default(now())
 
   performer User @relation(fields: [performer_id], references: [id], onDelete: Cascade)
+}
+
+model PromoCode {
+  id                 String       @id @default(cuid())
+  code               String       @unique
+  type               DiscountType
+  value              Float
+  maxDiscountAmount  Float?
+  minOrderAmount     Float?
+  isSingleUsePerUser Boolean      @default(false)
+
+  isActive    Boolean   @default(true)
+  currentUses Int       @default(0)
+  maxUses     Int?
+  validUntil  DateTime?
+
+  subscriptions UserSubscription[]
+  usedByUsers   User[]             @relation("PromoCodeUsers")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
