@@ -840,3 +840,29 @@ model PromoCode {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model SiteVisit {
+  id        String   @id @default(cuid())
+  ipAddress String
+  userAgent String?
+  path      String
+  visitedAt DateTime @default(now())
+
+  // To group unique visitors roughly by day
+  visitDate DateTime @db.Date
+
+  @@index([visitDate])
+  @@index([ipAddress])
+}
+
+model SecurityLog {
+  id        String   @id @default(cuid())
+  ipAddress String
+  eventType String // e.g., "RATE_LIMIT_EXCEEDED"
+  path      String
+  details   String?
+  createdAt DateTime @default(now())
+
+  @@index([ipAddress])
+  @@index([eventType])
+}

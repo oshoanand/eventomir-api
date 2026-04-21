@@ -14,7 +14,11 @@ import { connectRedis } from "./libs/redis.js";
 // 🚨 IMPORT THE SUBSCRIPTION CRON WORKER
 import { startSubscriptionCron } from "./cron/subscription-worker.js";
 
+// 🚨 IMPORT SECURITY & ANALYTICS
+import { globalRateLimiter } from "./middleware/security.js";
+
 // Routes
+import analyticsRoutes from "./routes/analytics.js";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import userRoutes from "./routes/user.js";
@@ -89,6 +93,10 @@ async function initializeExpressServer() {
     next();
   });
 
+  // 🚨 APPLY GLOBAL RATE LIMITER
+  // This must be placed here so it protects the body parsers and all routes below
+  app.use(globalRateLimiter);
+
   // --- Standard Express Middleware for all other routes ---
   app.use(express.json());
   app.use(
@@ -136,6 +144,7 @@ async function initializeExpressServer() {
   app.use("/api/webhooks", webhookRoutes);
   app.use("/api/invitations", invitationRoutes);
   app.use("/api/promo-codes", promoRoutes);
+  app.use("/api/analytics", analyticsRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;
