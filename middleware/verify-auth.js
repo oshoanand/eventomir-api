@@ -36,3 +36,28 @@ export const verifyAuth = async (req, res, next) => {
     return res.status(403).json({ access: "Forbidden" });
   }
 };
+
+export const verifyOptionalAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  // Если токена нет, просто продолжаем выполнение как гость
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    req.user = null;
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    // Пытаемся расшифровать токен
+    const decoded = jwt.verify(token, process.env.SECRET);
+    req.user = decoded; // Если токен валиден, прикрепляем пользователя
+  } catch (error) {
+    // Если токен истек или подделан, мы НЕ выбрасываем ошибку.
+    // Мы просто обнуляем пользователя и продолжаем как гость.
+    req.user = null;
+  }
+
+  // Обязательно вызываем next() вне зависимости от результата
+  next();
+};

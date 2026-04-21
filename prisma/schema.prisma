@@ -34,6 +34,9 @@ enum NotificationType {
   PARTNER_REQUEST
   PARTNER_APPROVED
   PAYOUT_REQUEST
+
+  SUPPORT_TICKET
+  SUPPORT_UPDATE
 }
 
 enum SubscriptionTier {
@@ -124,6 +127,30 @@ enum DiscountType {
   FLAT
 }
 
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TicketType {
+  BUG_REPORT
+  FEATURE_REQUEST
+  BILLING
+  TECHNICAL_SUPPORT
+  GENERAL_INQUIRY
+  OTHER
+}
+
 // ==========================================
 // USER & AUTHENTICATION MODELS
 // ==========================================
@@ -182,8 +209,8 @@ model User {
   paid_requests         PaidRequest[]
   gallery_items         GalleryItem[]
 
-  support_requests_as_requester SupportRequest[] @relation("RequesterSupport")
-  support_requests_as_manager   SupportRequest[] @relation("ManagerSupport")
+  support_requests_as_requester SupportTicket[] @relation("RequesterSupport")
+  support_requests_as_manager   SupportTicket[] @relation("ManagerSupport")
 
   referral_events_as_referred ReferralEvent[] @relation("ReferredUser")
 
@@ -215,10 +242,11 @@ model User {
   walletTransactions WalletTransaction[]
 
   // Relations for the universal chat
-  chatsAsUser1   ChatSession[] @relation("ChatUser1")
-  chatsAsUser2   ChatSession[] @relation("ChatUser2")
+  chatsAsUser1   ChatSession[]   @relation("ChatUser1")
+  chatsAsUser2   ChatSession[]   @relation("ChatUser2")
   messagesSent   ChatMessage[]
-  usedPromoCodes PromoCode[]   @relation("PromoCodeUsers")
+  usedPromoCodes PromoCode[]     @relation("PromoCodeUsers")
+  supportTickets SupportTicket[]
 }
 
 model Account {
@@ -397,7 +425,7 @@ model ChatSession {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  supportRequest SupportRequest?
+  supportTicket SupportTicket?
 
   @@unique([user1Id, user2Id])
 }
@@ -420,19 +448,52 @@ model ChatMessage {
   sender  User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
 
-model SupportRequest {
-  id                  String    @id @default(cuid())
-  requester_id        String
-  requester_name      String
-  chat_id             String    @unique
-  status              String    @default("open")
-  assigned_manager_id String?
-  created_at          DateTime  @default(now())
-  closed_at           DateTime?
+// ==========================================
+// ROBUST SUPPORT TICKET MODEL
+// ==========================================
+model SupportTicket {
+  id String @id @default(cuid())
 
-  requester        User        @relation("RequesterSupport", fields: [requester_id], references: [id], onDelete: Cascade)
-  chat             ChatSession @relation(fields: [chat_id], references: [id], onDelete: Cascade)
-  assigned_manager User?       @relation("ManagerSupport", fields: [assigned_manager_id], references: [id], onDelete: SetNull)
+  // 1. Core Ticket Info
+  ticket_number Int            @unique @default(autoincrement()) // Human-readable ID (e.g., #1042)
+  subject       String // Short summary/title of the issue
+  description   String         @db.Text // The initial detailed message
+  type          TicketType     @default(GENERAL_INQUIRY)
+  priority      TicketPriority @default(NORMAL)
+  status        TicketStatus   @default(OPEN)
+
+  // 2. Attachments / Evidence 
+  // (Use JSON if MySQL/SQLite, String[] if PostgreSQL)
+  attachments String[]
+
+  // 3. Requester Info (Supports both Auth Users and Guests)
+  requester_id   String? // Made optional to support guest tickets
+  contact_mobile String? // Essential if requester_id is null
+  contact_email  String? // Optional fallback contact
+
+  // 4. Assignments & Workflow
+  assigned_manager_id String?
+  chat_id             String? @unique // Made optional: Chat might only be created IF admin initiates real-time session
+
+  // 5. SLA & Timestamps
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  first_response_at DateTime? // Tracks how fast admin replied
+  resolved_at       DateTime? // Tracks how fast issue was fixed
+  closed_at         DateTime? // When ticket is archived/locked
+
+  // 6. Relations
+  requester        User?        @relation("RequesterSupport", fields: [requester_id], references: [id], onDelete: SetNull)
+  assigned_manager User?        @relation("ManagerSupport", fields: [assigned_manager_id], references: [id], onDelete: SetNull)
+  chat             ChatSession? @relation(fields: [chat_id], references: [id], onDelete: SetNull)
+  user             User?        @relation(fields: [userId], references: [id])
+  userId           String?
+
+  // 7. Database Indexes for Admin Dashboard Performance
+  @@index([status, priority])
+  @@index([created_at])
+  @@index([requester_id])
+  @@index([assigned_manager_id])
 }
 
 model Notification {

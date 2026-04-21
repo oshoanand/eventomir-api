@@ -43,6 +43,7 @@ import webhookRoutes from "./routes/webhooks.js";
 import fcmRoutes from "./routes/fcm.js";
 import invitationRoutes from "./routes/invitation.js";
 import promoRoutes from "./routes/promo.js";
+import supportRoutes from "./routes/support.js";
 
 dotenv.config();
 
@@ -145,6 +146,7 @@ async function initializeExpressServer() {
   app.use("/api/invitations", invitationRoutes);
   app.use("/api/promo-codes", promoRoutes);
   app.use("/api/analytics", analyticsRoutes);
+  app.use("/api/support", supportRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;
