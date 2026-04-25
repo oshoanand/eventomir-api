@@ -18,8 +18,6 @@ router.post("/", verifyAuth, createPaidRequest);
 // 2. GET MY REQUESTS (Customer Dashboard)
 // GET /api/requests/customer
 // ==========================================
-// 🚨 Security Note: No :customerId in the URL!
-// The controller securely reads req.user.id from the verifyAuth token.
 router.get("/customer", verifyAuth, getCustomerRequests);
 
 // ==========================================

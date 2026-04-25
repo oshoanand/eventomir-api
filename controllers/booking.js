@@ -1,6 +1,5 @@
 import prisma from "../libs/prisma.js";
 
-// 🚨 IMPORT THE MASTER DISPATCHER
 import { notifyUser } from "../services/notification.js";
 
 // ==========================================
@@ -8,30 +7,43 @@ import { notifyUser } from "../services/notification.js";
 // ==========================================
 export const createBooking = async (req, res) => {
   try {
+    // Note: performerId from frontend is usually the base User ID of the performer
     const { performerId, date, details } = req.body;
 
     // SECURITY: Use the ID from the verified JWT token
-    const customerId = req.user?.id || req.body.customerId;
+    const customerUserId = req.user?.id || req.body.customerId;
 
     // 1. Validation
-    if (!performerId || !date || !customerId) {
+    if (!performerId || !date || !customerUserId) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    // 2. Check if performer exists
-    const performer = await prisma.user.findUnique({
-      where: { id: performerId },
-      select: { id: true, name: true, email: true },
+    // 2. Fetch the strict Customer Profile
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId: customerUserId },
+      include: { user: { select: { name: true } } },
     });
 
-    if (!performer) {
+    if (!customerProfile) {
+      return res
+        .status(403)
+        .json({ message: "Customer profile required to make a booking." });
+    }
+
+    // 3. Fetch the strict Performer Profile
+    const performerProfile = await prisma.performerProfile.findUnique({
+      where: { userId: performerId }, // Assuming frontend sends base User ID
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+
+    if (!performerProfile) {
       return res.status(404).json({ message: "Performer not found" });
     }
 
-    // 3. Check for availability (Prevent double booking)
+    // 4. Check for availability (Prevent double booking)
     const existingBooking = await prisma.booking.findFirst({
       where: {
-        performerId,
+        performerId: performerProfile.id, // Use Profile ID, not User ID
         date: new Date(date),
         status: "CONFIRMED",
       },
@@ -43,32 +55,29 @@ export const createBooking = async (req, res) => {
         .json({ message: "Performer is not available on this date" });
     }
 
-    // 4. Create Booking
+    // 5. Create Booking connecting the Profiles
     const booking = await prisma.booking.create({
       data: {
         date: new Date(date),
         details,
         status: "PENDING",
-        customer: { connect: { id: customerId } },
-        performer: { connect: { id: performerId } },
-      },
-      include: {
-        customer: { select: { name: true } },
+        customer: { connect: { id: customerProfile.id } },
+        performer: { connect: { id: performerProfile.id } },
       },
     });
 
     // ---------------------------------------------------------
-    // 5. NOTIFY PERFORMER (FCM Push + Socket + DB)
+    // 6. NOTIFY PERFORMER (FCM Push + Socket + DB)
     // ---------------------------------------------------------
     await notifyUser({
-      userId: performerId,
+      userId: performerProfile.userId, // Notification requires base User ID
       title: "📅 Новый запрос на бронирование",
-      body: `Вы получили новый запрос на бронирование от ${booking.customer.name}`,
+      body: `Вы получили новый запрос на бронирование от ${customerProfile.user.name || "пользователя"}`,
       type: "BOOKING_REQUEST",
       data: {
         bookingId: booking.id,
         date: booking.date,
-        url: "/performer-profile/bookings", // Deep link for Push Notification click
+        url: "/performer-profile/bookings",
       },
     });
 
@@ -87,15 +96,20 @@ export const acceptBooking = async (req, res) => {
     const { requestId } = req.params;
 
     // SECURITY: Ensure the person accepting is the actual performer
-    const performerId = req.user?.id || req.body.performerId;
+    const performerUserId = req.user?.id || req.body.performerId;
 
     const booking = await prisma.booking.findUnique({
       where: { id: requestId },
-      include: { performer: true },
+      include: {
+        performer: { include: { user: true } },
+        customer: { include: { user: true } },
+      },
     });
 
     if (!booking) return res.status(404).json({ message: "Booking not found" });
-    if (booking.performerId !== performerId) {
+
+    // Check if the underlying user ID matches the token
+    if (booking.performer.userId !== performerUserId) {
       return res.status(403).json({ message: "Unauthorized action" });
     }
 
@@ -103,16 +117,15 @@ export const acceptBooking = async (req, res) => {
     const updatedBooking = await prisma.booking.update({
       where: { id: requestId },
       data: { status: "CONFIRMED" },
-      include: { performer: { select: { name: true } } },
     });
 
     // ---------------------------------------------------------
     // NOTIFY CUSTOMER (FCM Push + Socket + DB)
     // ---------------------------------------------------------
     await notifyUser({
-      userId: updatedBooking.customerId,
+      userId: booking.customer.userId, // Notification requires base User ID
       title: "Заказ принят! 🎉",
-      body: `Исполнитель ${updatedBooking.performer.name} принял ваш заказ!`,
+      body: `Исполнитель ${booking.performer.user.name} принял ваш заказ!`,
       type: "BOOKING_ACCEPTED",
       data: {
         bookingId: updatedBooking.id,
@@ -134,31 +147,38 @@ export const acceptBooking = async (req, res) => {
 export const rejectBooking = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const performerId = req.user?.id || req.body.performerId;
+
+    // SECURITY: Ensure the person rejecting is the actual performer
+    const performerUserId = req.user?.id || req.body.performerId;
 
     const booking = await prisma.booking.findUnique({
       where: { id: requestId },
-      include: { performer: true },
+      include: {
+        performer: { include: { user: true } },
+        customer: { include: { user: true } },
+      },
     });
 
     if (!booking) return res.status(404).json({ message: "Booking not found" });
-    if (booking.performerId !== performerId) {
+
+    // Check if the underlying user ID matches the token
+    if (booking.performer.userId !== performerUserId) {
       return res.status(403).json({ message: "Unauthorized action" });
     }
 
+    // Update Status
     const updatedBooking = await prisma.booking.update({
       where: { id: requestId },
       data: { status: "REJECTED" },
-      include: { performer: { select: { name: true } } },
     });
 
     // ---------------------------------------------------------
     // NOTIFY CUSTOMER (FCM Push + Socket + DB)
     // ---------------------------------------------------------
     await notifyUser({
-      userId: updatedBooking.customerId,
+      userId: booking.customer.userId, // Notification requires base User ID
       title: "Заказ отклонен",
-      body: `Исполнитель ${updatedBooking.performer.name} отклонил ваш запрос.`,
+      body: `Исполнитель ${booking.performer.user.name} отклонил ваш запрос.`,
       type: "BOOKING_REJECTED",
       data: {
         bookingId: updatedBooking.id,

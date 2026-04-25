@@ -12,54 +12,75 @@ const router = Router();
 router.get("/:id/pdf", verifyAuth, async (req, res) => {
   try {
     const inviteId = req.params.id;
-    const userEmail = req.user.email; // Extracted from the JWT token via verifyAuth
+    const userId = req.user.id;
 
-    // 1. Fetch the invitation and the associated event
+    // 1. Fetch the user securely from the DB to guarantee we have their correct email and role
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "Пользователь не найден" });
+    }
+
+    // 2. Fetch the invitation and the associated event
     const invitation = await prisma.invitation.findUnique({
       where: { id: inviteId },
       include: { event: true },
     });
 
-    // 2. Validate existence
     if (!invitation) {
-      return res.status(404).json({ message: "Приглашение не найдено" }); // Invitation not found
+      return res.status(404).json({ message: "Приглашение не найдено" });
     }
 
     // 3. Security: Ensure the user requesting the PDF actually owns this invitation
+    // We use .toLowerCase() to prevent case-sensitivity bugs when matching emails
     if (
-      invitation.guestEmail !== userEmail &&
-      req.user.role !== "administrator"
+      invitation.guestEmail.toLowerCase() !== user.email.toLowerCase() &&
+      user.role !== "administrator"
     ) {
-      return res.status(403).json({ message: "Нет доступа к этому билету" }); // Access denied
+      return res.status(403).json({ message: "Нет доступа к этому билету" });
     }
 
     // 4. Validate Status: Only accepted RSVPs get a ticket
     if (invitation.status !== "ACCEPTED") {
-      return res.status(400).json({ message: "Приглашение не подтверждено" }); // Not accepted
+      return res.status(400).json({ message: "Приглашение не подтверждено" });
     }
 
     // 5. Format Data for the PDF Generator
-    // Your PDF generator expects a "User" object. Since Invitations use `guestName` and `guestEmail`,
-    // we map them into a mock user object to prevent crashes inside the PDF generator.
+    // Map them into a mock user object to prevent crashes inside the PDF generator.
     const mockUser = {
-      name: invitation.guestName || "Гость", // "Guest" fallback
+      name: invitation.guestName || "Гость",
       email: invitation.guestEmail,
     };
 
+    // 🚨 FIX: The PDF generator likely expects an 'Order' object.
+    // We map 'ticketToken' to 'ticketCode' and add 'ticketCount' and 'totalPrice' to prevent crashes.
+    const mockOrderPayload = {
+      ...invitation,
+      ticketCode: invitation.ticketToken,
+      ticketCount: 1,
+      totalPrice: 0,
+    };
+
     // 6. Generate the PDF
-    // Note: Ensure your `generateTicketPDF` handles `invitation.ticketToken`
-    // and correctly displays "FREE (RSVP)" if `totalPrice` is undefined.
     const pdfBuffer = await generateTicketPDF(
-      invitation,
+      mockOrderPayload,
       invitation.event,
       mockUser,
     );
 
     // 7. Send the PDF to the client
+    // 🚨 FIX: Replaced regex to securely strip out all unsafe characters from the filename
+    const safeFilename = invitation.event.title.replace(
+      /[^a-zA-Z0-9а-яА-Я]/g,
+      "_",
+    );
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="Ticket_${invitation.event.title.replace(/\s+/g, "_")}.pdf"`,
+      `attachment; filename="Ticket_${safeFilename}.pdf"`,
     );
     res.send(pdfBuffer);
   } catch (error) {

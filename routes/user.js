@@ -2,6 +2,7 @@ import { Router } from "express";
 import { fetchCached } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import prisma from "../libs/prisma.js";
+import { requireRole } from "../middleware/role-check.js";
 
 const router = Router();
 
@@ -13,17 +14,14 @@ const router = Router();
 router.get("/me", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        account_type: true,
-        walletBalance: true,
-        profile_picture: true,
-        created_at: true,
+      include: {
+        customerProfile: true,
+        performerProfile: true,
+        partnerProfile: true,
+        adminProfile: true,
       },
     });
 
@@ -33,7 +31,18 @@ router.get("/me", verifyAuth, async (req, res) => {
         .json({ message: "Пользователь не найден (User not found)" });
     }
 
-    res.status(200).json(user);
+    const accountType = user.performerProfile?.accountType || null;
+
+    res.status(200).json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      accountType,
+      walletBalance: user.walletBalance,
+      image: user.image,
+      createdAt: user.createdAt,
+    });
   } catch (error) {
     console.error("Get Me Error:", error);
     res
@@ -45,13 +54,11 @@ router.get("/me", verifyAuth, async (req, res) => {
 // GET /api/users/customers
 router.get("/customers", async (req, res) => {
   try {
-    // 1. Get query params (default to Page 1, Limit 10)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const search = req.query.search || "";
     const skip = (page - 1) * limit;
 
-    // 2. Construct Prisma "Where" Clause
     const baseWhere = { role: "customer" };
 
     const searchWhere = search
@@ -65,11 +72,8 @@ router.get("/customers", async (req, res) => {
       : {};
 
     const whereClause = { AND: [baseWhere, searchWhere] };
-
-    // 3. Create a unique cache key
     const cacheKey = `customers_p${page}_l${limit}_s${search.replace(/\s/g, "")}`;
 
-    // 4. Use the generic caching function
     const result = await fetchCached("users", cacheKey, async () => {
       const [total, customers] = await prisma.$transaction([
         prisma.user.count({ where: whereClause }),
@@ -77,12 +81,39 @@ router.get("/customers", async (req, res) => {
           where: whereClause,
           skip: skip,
           take: limit,
-          orderBy: { created_at: "desc" },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            image: true,
+            walletBalance: true,
+            createdAt: true,
+            customerProfile: {
+              select: {
+                city: true,
+                moderationStatus: true,
+              },
+            },
+          },
         }),
       ]);
 
+      const flattenedCustomers = customers.map((c) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        phone: c.phone,
+        image: c.image,
+        walletBalance: c.walletBalance,
+        createdAt: c.createdAt,
+        city: c.customerProfile?.city || null,
+        moderationStatus: c.customerProfile?.moderationStatus || "PENDING",
+      }));
+
       return {
-        data: customers,
+        data: flattenedCustomers,
         meta: {
           total,
           page,
@@ -92,7 +123,6 @@ router.get("/customers", async (req, res) => {
       };
     });
 
-    // 5. Return response
     return res.status(200).json({
       data: result.data || [],
       meta: result.meta || { total: 0, page, limit, totalPages: 0 },
@@ -108,13 +138,11 @@ router.get("/customers", async (req, res) => {
 // GET /api/users/performers
 router.get("/performers", async (req, res) => {
   try {
-    // 1. Get query params
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const search = req.query.search || "";
     const skip = (page - 1) * limit;
 
-    // 2. Construct Prisma "Where" Clause
     const baseWhere = { role: "performer" };
 
     const searchWhere = search
@@ -128,11 +156,8 @@ router.get("/performers", async (req, res) => {
       : {};
 
     const whereClause = { AND: [baseWhere, searchWhere] };
-
-    // 3. Create a unique cache key
     const cacheKey = `performers_p${page}_l${limit}_s${search.replace(/\s/g, "")}`;
 
-    // 4. Use the generic caching function
     const result = await fetchCached("users", cacheKey, async () => {
       const [total, performers] = await prisma.$transaction([
         prisma.user.count({ where: whereClause }),
@@ -140,12 +165,41 @@ router.get("/performers", async (req, res) => {
           where: whereClause,
           skip: skip,
           take: limit,
-          orderBy: { created_at: "desc" },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            image: true,
+            walletBalance: true,
+            createdAt: true,
+            performerProfile: {
+              select: {
+                city: true,
+                roles: true,
+                moderationStatus: true,
+              },
+            },
+          },
         }),
       ]);
 
+      const flattenedPerformers = performers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        email: p.email,
+        phone: p.phone,
+        image: p.image,
+        walletBalance: p.walletBalance,
+        createdAt: p.createdAt,
+        city: p.performerProfile?.city || null,
+        roles: p.performerProfile?.roles || [],
+        moderationStatus: p.performerProfile?.moderationStatus || "PENDING",
+      }));
+
       return {
-        data: performers,
+        data: flattenedPerformers,
         meta: {
           total,
           page,
@@ -155,13 +209,12 @@ router.get("/performers", async (req, res) => {
       };
     });
 
-    // 5. Return response
     return res.status(200).json({
       data: result.data || [],
       meta: result.meta || { total: 0, page, limit, totalPages: 0 },
     });
   } catch (error) {
-    console.error("Error fetching performers:", error.message); // Fixed log message
+    console.error("Error fetching performers:", error.message);
     return res
       .status(500)
       .json({ message: "Server error while fetching performers" });
@@ -172,11 +225,9 @@ router.get("/performers", async (req, res) => {
 // PARAMETERIZED ROUTES (Favorites)
 // ==========================================
 
-// Middleware array to combine auth check + ownership check
 const verifyUserOwnership = [
   verifyAuth,
   (req, res, next) => {
-    // Ensure the :customerId in the URL matches the logged-in user's ID
     if (req.user.id !== req.params.customerId) {
       return res
         .status(403)
@@ -190,16 +241,31 @@ const verifyUserOwnership = [
 router.get("/:customerId/favorites", verifyUserOwnership, async (req, res) => {
   const { customerId } = req.params;
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: customerId },
-      select: { favorite_performers: true },
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId: customerId },
     });
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!customerProfile) return res.status(200).json([]);
 
-    res.status(200).json(user.favorite_performers || []);
+    const favorites = await prisma.favorite.findMany({
+      where: { customer_id: customerProfile.id },
+      include: {
+        performer: {
+          include: { user: { select: { id: true, name: true, image: true } } },
+        },
+      },
+      orderBy: { created_at: "desc" },
+    });
+
+    const formattedFavorites = favorites.map((fav) => ({
+      id: fav.performer.user.id,
+      name: fav.performer.user.name,
+      image: fav.performer.user.image,
+      roles: fav.performer.roles,
+      city: fav.performer.city,
+    }));
+
+    res.status(200).json(formattedFavorites);
   } catch (error) {
     console.error("Error fetching favorites:", error);
     res.status(500).json({ message: "Internal Server Error" });
@@ -218,29 +284,30 @@ router.post("/:customerId/favorites", verifyUserOwnership, async (req, res) => {
   }
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: customerId },
-      select: { favorite_performers: true },
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId: customerId },
     });
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    const performerProfile = await prisma.performerProfile.findUnique({
+      where: { userId: performer.id },
+    });
+
+    if (!customerProfile || !performerProfile) {
+      return res.status(404).json({ message: "Профиль не найден" });
     }
 
-    const currentFavorites = user.favorite_performers || [];
-
-    // Prevent duplicates
-    if (currentFavorites.some((fav) => fav.id === performer.id)) {
-      return res
-        .status(200)
-        .json({ message: "Performer is already in favorites." });
-    }
-
-    const updatedFavorites = [...currentFavorites, performer];
-
-    await prisma.user.update({
-      where: { id: customerId },
-      data: { favorite_performers: updatedFavorites },
+    await prisma.favorite.upsert({
+      where: {
+        customer_id_performer_id: {
+          customer_id: customerProfile.id,
+          performer_id: performerProfile.id,
+        },
+      },
+      update: {},
+      create: {
+        customer_id: customerProfile.id,
+        performer_id: performerProfile.id,
+      },
     });
 
     res.status(201).json({ message: "Added to favorites." });
@@ -257,23 +324,28 @@ router.get(
   async (req, res) => {
     const { customerId, performerId } = req.params;
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: customerId },
-        select: { favorite_performers: true },
+      const customerProfile = await prisma.customerProfile.findUnique({
+        where: { userId: customerId },
       });
 
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
+      const performerProfile = await prisma.performerProfile.findUnique({
+        where: { userId: performerId },
+      });
+
+      if (!customerProfile || !performerProfile) {
+        return res.status(200).json({ isFavorite: false });
       }
 
-      const currentFavorites = user.favorite_performers || [];
-      const isFavorite = currentFavorites.some((fav) => fav.id === performerId);
+      const favorite = await prisma.favorite.findUnique({
+        where: {
+          customer_id_performer_id: {
+            customer_id: customerProfile.id,
+            performer_id: performerProfile.id,
+          },
+        },
+      });
 
-      if (isFavorite) {
-        res.status(200).json({ isFavorite: true });
-      } else {
-        res.status(404).json({ isFavorite: false });
-      }
+      res.status(200).json({ isFavorite: !!favorite });
     } catch (error) {
       console.error("Error checking favorite status:", error);
       res.status(500).json({ message: "Internal Server Error" });
@@ -289,29 +361,217 @@ router.delete(
     const { customerId, performerId } = req.params;
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: customerId },
-        select: { favorite_performers: true },
+      const customerProfile = await prisma.customerProfile.findUnique({
+        where: { userId: customerId },
       });
 
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
+      const performerProfile = await prisma.performerProfile.findUnique({
+        where: { userId: performerId },
+      });
+
+      if (!customerProfile || !performerProfile) {
+        return res.status(404).json({ message: "Профиль не найден" });
       }
 
-      const currentFavorites = user.favorite_performers || [];
-      const updatedFavorites = currentFavorites.filter(
-        (fav) => fav.id !== performerId,
-      );
-
-      await prisma.user.update({
-        where: { id: customerId },
-        data: { favorite_performers: updatedFavorites },
+      await prisma.favorite.delete({
+        where: {
+          customer_id_performer_id: {
+            customer_id: customerProfile.id,
+            performer_id: performerProfile.id,
+          },
+        },
       });
 
       res.status(204).send();
     } catch (error) {
       console.error("Error removing from favorites:", error);
       res.status(500).json({ message: "Internal Server Error" });
+    }
+  },
+);
+
+// =================================================================
+//                 PERFORMER DETAILS ROUTE (ADMIN)
+// =================================================================
+
+router.get(
+  "/performers/:id",
+  requireRole(["administrator", "support"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const user = await prisma.user.findUnique({
+        where: { id },
+        include: {
+          performerProfile: {
+            include: {
+              galleryItems: { orderBy: { created_at: "desc" } },
+              certificates: { orderBy: { created_at: "desc" } },
+              recommendations: { orderBy: { created_at: "desc" } },
+              bookingsReceived: {
+                include: {
+                  customer: { include: { user: true } },
+                },
+                orderBy: { createdAt: "desc" },
+              },
+              eventsHosted: { orderBy: { createdAt: "desc" } },
+            },
+          },
+        },
+      });
+
+      if (!user || !user.performerProfile) {
+        return res.status(404).json({ message: "Performer profile not found" });
+      }
+
+      const p = user.performerProfile;
+
+      const mappedData = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        companyName: p.companyName,
+        inn: p.inn,
+        description: p.description,
+        image: user.image,
+        priceRange: p.priceRange || [],
+        moderationStatus: p.moderationStatus,
+        createdAt: user.createdAt,
+        gallery: p.galleryItems.map((g) => ({
+          id: g.id,
+          title: g.title,
+          imageUrls: g.image_urls,
+          description: g.description,
+          moderationStatus: g.moderation_status,
+          createdAt: g.created_at,
+        })),
+        certificates: p.certificates.map((c) => ({
+          id: c.id,
+          fileUrl: c.file_url,
+          description: c.description,
+          moderationStatus: c.moderation_status,
+          createdAt: c.created_at,
+        })),
+        recommendationLetters: p.recommendations.map((l) => ({
+          id: l.id,
+          fileUrl: l.file_url,
+          description: l.description,
+          moderationStatus: l.moderation_status,
+          createdAt: l.created_at,
+        })),
+        bookings: p.bookingsReceived.map((b) => ({
+          id: b.id,
+          date: b.date,
+          status: b.status,
+          details: b.details,
+          createdAt: b.createdAt,
+          price: 0,
+          customerName: b.customer.user.name || "Неизвестно",
+          customerEmail: b.customer.user.email,
+          customerPhone: b.customer.user.phone,
+        })),
+        events: p.eventsHosted.map((e) => ({
+          id: e.id,
+          title: e.title,
+          date: e.date,
+          status: e.status,
+          city: e.city,
+          price: e.price,
+          imageUrl: e.imageUrl,
+          createdAt: e.createdAt,
+        })),
+      };
+
+      res.status(200).json(mappedData);
+    } catch (error) {
+      console.error("Error fetching admin performer details:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  },
+);
+
+// =================================================================
+//                 CUSTOMER DETAILS ROUTE (ADMIN)
+// =================================================================
+
+router.get(
+  "/customers/:id",
+  requireRole(["administrator", "support"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const user = await prisma.user.findUnique({
+        where: { id },
+        include: {
+          customerProfile: {
+            include: {
+              bookings: {
+                include: {
+                  performer: { include: { user: true } },
+                },
+                orderBy: { createdAt: "desc" },
+              },
+              paidRequests: {
+                orderBy: { createdAt: "desc" },
+              },
+            },
+          },
+        },
+      });
+
+      if (!user || !user.customerProfile) {
+        return res.status(404).json({ message: "Customer profile not found" });
+      }
+
+      const c = user.customerProfile;
+      const totalBookings = c.bookings.length;
+      const confirmedBookings = c.bookings.filter((b) =>
+        ["CONFIRMED", "COMPLETED", "FULFILLED"].includes(b.status),
+      ).length;
+      const totalPaidRequests = c.paidRequests.length;
+
+      const mappedData = {
+        id: user.id,
+        name: user.name || "Unknown User",
+        email: user.email,
+        phone: user.phone,
+        city: c.city,
+        image: user.image,
+        moderationStatus: c.moderationStatus,
+        createdAt: user.createdAt,
+        bookings: c.bookings.map((b) => ({
+          id: b.id,
+          date: b.date,
+          status: b.status,
+          details: b.details,
+          price: 0,
+          createdAt: b.createdAt,
+          performerName: b.performer.user.name || "Неизвестный исполнитель",
+          performerEmail: b.performer.user.email,
+          performerPhone: b.performer.user.phone,
+        })),
+        paidRequests: c.paidRequests.map((pr) => ({
+          id: pr.id,
+          status: pr.status,
+          category: pr.category,
+          amount: parseInt(pr.budget) || 0,
+          description: pr.serviceDescription,
+          createdAt: pr.createdAt,
+        })),
+        stats: {
+          totalBookings,
+          confirmedBookings,
+          totalPaidRequests,
+        },
+      };
+
+      res.status(200).json(mappedData);
+    } catch (error) {
+      console.error("Error fetching admin customer details:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
   },
 );
@@ -328,13 +588,11 @@ router.get("/:id", verifyAuth, async (req, res) => {
       return res.status(400).json({ message: "User ID is required" });
     }
 
-    // Fetch only safe, public-facing fields using Prisma 'select'
     const user = await prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
         name: true,
-        profile_picture: true,
         image: true,
         role: true,
       },
@@ -344,12 +602,10 @@ router.get("/:id", verifyAuth, async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Send back the data. We check both profile_picture and image
-    // depending on how they registered (OAuth vs Email)
     res.status(200).json({
       id: user.id,
       name: user.name || "Пользователь",
-      profilePicture: user.profile_picture || user.image || null,
+      image: user.image || null,
       role: user.role,
     });
   } catch (error) {

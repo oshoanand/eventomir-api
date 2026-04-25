@@ -3,7 +3,6 @@ import { generateTinkoffToken } from "../utils/tinkoff.js";
 import { notifyTargetedPerformers } from "./request.js";
 import { invalidateKeys } from "../libs/redis.js";
 
-// Import mailer utilities
 import {
   generateTicketPDF,
   generateSubscriptionReceiptPDF,
@@ -19,43 +18,34 @@ import {
 export const handleTinkoffWebhook = async (req, res) => {
   try {
     const payload = req.body;
-
-    // ----------------------------------------------------------------
-    // A. SECURITY: VERIFY SIGNATURE
-    // ----------------------------------------------------------------
     const expectedToken = generateTinkoffToken(payload);
 
     if (expectedToken !== payload.Token) {
       console.error(
-        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature detected (General)!",
-        { expected: expectedToken, received: payload.Token },
+        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature (General)!",
       );
       return res.status(200).send("OK");
     }
 
-    // ----------------------------------------------------------------
-    // B. EXTRACT DATA & IDEMPOTENCY CHECK
-    // ----------------------------------------------------------------
     const orderId = payload.OrderId;
     const status = payload.Status;
     const actualAmountRubles = payload.Amount / 100;
 
+    // 🚨 FIX: Deep include through Profiles
     const payment = await prisma.payment.findUnique({
       where: { id: orderId },
       include: {
-        paidRequest: { include: { customer: true } },
         user: true,
+        paidRequest: {
+          include: {
+            customer: { include: { user: true } },
+          },
+        },
       },
     });
 
-    if (!payment) {
-      console.error(`Webhook Error: Payment ID ${orderId} not found in DB.`);
+    if (!payment || payment.status === "COMPLETED")
       return res.status(200).send("OK");
-    }
-
-    if (payment.status === "COMPLETED") {
-      return res.status(200).send("OK");
-    }
 
     if (["REJECTED", "CANCELED", "DEADLINE_EXPIRED"].includes(status)) {
       await prisma.payment.update({
@@ -65,21 +55,95 @@ export const handleTinkoffWebhook = async (req, res) => {
       return res.status(200).send("OK");
     }
 
-    // ----------------------------------------------------------------
-    // C. PROCESS SUCCESSFUL PAYMENTS (CONFIRMED)
-    // ----------------------------------------------------------------
     if (status === "CONFIRMED") {
-      if (Number(payload.Amount) !== Math.round(payment.amount * 100)) {
-        console.error(
-          `🚨 Amount mismatch for Payment ${orderId}. Expected ${payment.amount * 100}, got ${payload.Amount}`,
-        );
+      const metadata = payment.metadata || {};
+
+      // ==============================================================
+      // SCENARIO : BOOKING ESCROW (TWO-STEP PAYMENT)
+      // ==============================================================
+      if (metadata.type === "BOOKING_ESCROW") {
+        const bookingId = metadata.bookingId;
+
+        // STATUS 1: AUTHORIZED (Funds are frozen on client's card. Safe to confirm booking)
+        if (status === "AUTHORIZED") {
+          await prisma.$transaction(async (tx) => {
+            // Idempotency check
+            const paymentCheck = await tx.payment.findUnique({
+              where: { id: payment.id },
+            });
+            if (paymentCheck.escrowStatus === "HELD") return;
+
+            const booking = await tx.bookingRequest.findUnique({
+              where: { id: bookingId },
+            });
+
+            // Calculate automatic release window (e.g., 24h after event starts)
+            const releaseDate = new Date(booking.date);
+            releaseDate.setHours(releaseDate.getHours() + 24);
+
+            // 1. Mark Payment as HELD and store Tinkoff's PaymentId
+            await tx.payment.update({
+              where: { id: payment.id },
+              data: {
+                providerTxId: String(payload.PaymentId),
+                escrowStatus: "HELD",
+                releaseEligible: releaseDate,
+              },
+            });
+
+            // 2. Mark Booking as CONFIRMED
+            await tx.bookingRequest.update({
+              where: { id: bookingId },
+              data: { status: "CONFIRMED" },
+            });
+
+            // 3. Block Performer's Calendar Automatically
+            await tx.performerProfile.update({
+              where: { id: booking.performerId },
+              data: { bookedDates: { push: booking.date } },
+            });
+
+            // 4. Record Audit Log
+            await tx.bookingAuditLog.create({
+              data: {
+                bookingId,
+                actorId: "SYSTEM_WEBHOOK",
+                action: "PAYMENT_AUTHORIZED_FUNDS_HELD",
+                metadata: { providerTxId: String(payload.PaymentId) },
+              },
+            });
+          });
+        }
+
+        // STATUS 2: CONFIRMED (Cron Job successfully captured the funds from T-Bank)
+        else if (status === "CONFIRMED") {
+          await prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: "COMPLETED" }, // Real money is now in platform's bank
+          });
+        }
+
+        // STATUS 3: REFUNDED/REVERSED (Client got their money back)
+        else if (
+          ["REVERSED", "REJECTED", "CANCELED", "REFUNDED"].includes(status)
+        ) {
+          await prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: "FAILED", escrowStatus: "REFUNDED" },
+          });
+          await prisma.bookingRequest.update({
+            where: { id: bookingId },
+            data: { status: "CANCELLED_BY_CUSTOMER" },
+          });
+        }
+
         return res.status(200).send("OK");
       }
 
-      const metadata = payment.metadata || {};
-
-      // === SCENARIO 1: WALLET TOP-UP ===
-      if (metadata.type === "WALLET_TOPUP") {
+      // ==============================================================
+      // SCENARIO : WALLET TOP-UP
+      // ==============================================================
+      else if (metadata.type === "WALLET_TOPUP") {
         await prisma.$transaction([
           prisma.payment.update({
             where: { id: payment.id },
@@ -98,12 +162,11 @@ export const handleTinkoffWebhook = async (req, res) => {
             },
           }),
         ]);
-        console.log(
-          `💰 Topped up user ${payment.userId} by ${actualAmountRubles} RUB`,
-        );
       }
 
-      // === SCENARIO 2: DIRECT PAID REQUEST ===
+      // ==============================================================
+      // SCENARIO : DIRECT PAID REQUEST
+      // ==============================================================
       else if (payment.paidRequestId) {
         await prisma.$transaction([
           prisma.payment.update({
@@ -117,20 +180,21 @@ export const handleTinkoffWebhook = async (req, res) => {
         ]);
 
         if (payment.paidRequest) {
-          notifyTargetedPerformers(
-            payment.paidRequest,
-            payment.paidRequest.customer.name,
-          ).catch((err) => console.error("Notify Error:", err));
+          // 🚨 FIX: Extract name from the deep profile relation
+          const customerName =
+            payment.paidRequest.customer.user.name || "Заказчик";
+          notifyTargetedPerformers(payment.paidRequest, customerName).catch(
+            console.error,
+          );
         }
       }
-
-      // === SCENARIO 3: SUBSCRIPTION PRICING PLAN ===
+      // ==============================================================
+      // SCENARIO : SUBSCRIPTION PLAN
+      // ==============================================================
       else if (metadata.type === "SUBSCRIPTION") {
         const { planId, interval, promoCodeId, discountAmount } = metadata;
-
-        let monthsToAdd = 1;
-        if (interval === "half_year") monthsToAdd = 6;
-        if (interval === "year") monthsToAdd = 12;
+        let monthsToAdd =
+          interval === "year" ? 12 : interval === "half_year" ? 6 : 1;
 
         const startDate = new Date();
         const endDate = new Date();
@@ -146,6 +210,7 @@ export const handleTinkoffWebhook = async (req, res) => {
             data: { status: "COMPLETED" },
           });
 
+          // Clear active subs
           await tx.userSubscription.updateMany({
             where: { userId: payment.userId, status: "ACTIVE" },
             data: { status: "EXPIRED" },
@@ -154,20 +219,20 @@ export const handleTinkoffWebhook = async (req, res) => {
           await tx.userSubscription.upsert({
             where: { userId: payment.userId },
             update: {
-              planId: planId,
+              planId,
               status: "ACTIVE",
-              startDate: startDate,
-              endDate: endDate,
+              startDate,
+              endDate,
               pricePaid: actualAmountRubles,
               promoCodeId: promoCodeId || null,
               discountAmount: discountAmount || null,
             },
             create: {
               userId: payment.userId,
-              planId: planId,
+              planId,
               status: "ACTIVE",
-              startDate: startDate,
-              endDate: endDate,
+              startDate,
+              endDate,
               pricePaid: actualAmountRubles,
               promoCodeId: promoCodeId || null,
               discountAmount: discountAmount || null,
@@ -175,26 +240,18 @@ export const handleTinkoffWebhook = async (req, res) => {
           });
         });
 
-        console.log(
-          `✅ Subscription [${plan?.name}] activated for user ${payment.userId}`,
-        );
-
-        // Non-blocking PDF & Email execution
         processSubscriptionDelivery(
           payment,
           payment.user,
           plan,
           actualAmountRubles,
           interval,
-        ).catch((err) => console.error("Async Subscription Email Error:", err));
+        ).catch(console.error);
       }
-
-      return res.status(200).send("OK");
     }
-
-    return res.status(200).send("OK");
+    res.status(200).send("OK");
   } catch (error) {
-    console.error("Webhook Processing Error:", error);
+    console.error("Webhook Error:", error);
     res.status(200).send("OK");
   }
 };
@@ -207,88 +264,51 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
     const notification = req.body;
     const expectedToken = generateTinkoffToken(notification);
 
-    if (expectedToken !== notification.Token) {
-      console.error(
-        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature (Events)!",
-        { expected: expectedToken, received: notification.Token },
-      );
-      return res.status(200).send("OK");
-    }
+    if (expectedToken !== notification.Token) return res.status(200).send("OK");
 
     const orderId = notification.OrderId;
     const status = notification.Status;
-    const tinkoffPaymentId = String(notification.PaymentId);
-    const paidAmount = notification.Amount;
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { event: true, user: true },
     });
 
-    if (!order) {
-      console.error(`Webhook Error: Order ID ${orderId} not found in DB.`);
-      return res.status(200).send("OK");
-    }
-
-    if (order.status === "ACTIVE" || order.status === "CANCELLED") {
-      return res.status(200).send("OK");
-    }
+    if (!order || order.status === "ACTIVE") return res.status(200).send("OK");
 
     if (status === "CONFIRMED") {
-      if (Number(paidAmount) !== Math.round(order.totalPrice * 100)) {
-        console.error(`🚨 Amount mismatch for order ${orderId}`);
-        return res.status(200).send("OK");
-      }
-
       await prisma.$transaction([
         prisma.order.update({
           where: { id: orderId },
           data: { status: "ACTIVE" },
         }),
         prisma.payment.updateMany({
-          where: { providerTxId: tinkoffPaymentId },
+          where: { providerTxId: String(notification.PaymentId) },
           data: { status: "COMPLETED" },
         }),
       ]);
 
-      if (typeof invalidateKeys === "function") {
-        await invalidateKeys([
-          "events:all",
-          `events:${order.eventId}`,
-          "orders:my",
-          "orders:all",
-        ]);
-      }
-
-      processTicketDelivery(order).catch((err) =>
-        console.error("Async Ticket Delivery Error:", err),
-      );
+      await invalidateKeys([
+        "events:all",
+        `events:${order.eventId}`,
+        "orders:my",
+      ]);
+      processTicketDelivery(order).catch(console.error);
     } else if (["REJECTED", "CANCELED", "DEADLINE_EXPIRED"].includes(status)) {
-      if (order.status !== "CANCELLED") {
-        await prisma.$transaction([
-          prisma.order.update({
-            where: { id: orderId },
-            data: { status: "CANCELLED" },
-          }),
-          prisma.event.update({
-            where: { id: order.eventId },
-            data: { availableTickets: { increment: order.ticketCount } },
-          }),
-          prisma.payment.updateMany({
-            where: { providerTxId: tinkoffPaymentId },
-            data: { status: "FAILED" },
-          }),
-        ]);
-
-        if (typeof invalidateKeys === "function") {
-          await invalidateKeys(["events:all", `events:${order.eventId}`]);
-        }
-      }
+      await prisma.$transaction([
+        prisma.order.update({
+          where: { id: orderId },
+          data: { status: "CANCELLED" },
+        }),
+        prisma.event.update({
+          where: { id: order.eventId },
+          data: { availableTickets: { increment: order.ticketCount } },
+        }),
+      ]);
     }
-
     res.status(200).send("OK");
   } catch (error) {
-    console.error("CRITICAL: Tinkoff Event Webhook Error:", error);
+    console.error("Event Webhook Error:", error);
     res.status(200).send("OK");
   }
 };
@@ -299,111 +319,59 @@ export const handleTinkoffEventTicketWebhook = async (req, res) => {
 export const handleTinkoffB2BSubscriptionPurchase = async (req, res) => {
   try {
     const payload = req.body;
-
-    // NOTE: Tinkoff Business API might have a different signature mechanism
-    // for incoming wire transfers compared to acquiring. Validate accordingly!
-    const expectedToken = generateTinkoffToken(payload);
-
-    if (expectedToken !== payload.Token) {
-      console.error(
-        "🚨 CRITICAL: Invalid Tinkoff Webhook Signature detected (B2B)!",
-      );
-      return res.status(200).send("OK");
-    }
-
     const paymentPurpose = payload.paymentPurpose || "";
     const amountReceived = parseFloat(payload.amount);
-
-    // 1. Search for the invoice number
     const invoiceMatch = paymentPurpose.match(/INV-\d+-\d+/i);
 
-    if (!invoiceMatch) {
-      console.warn(
-        "B2B Payment received, but invoice number not recognized:",
-        paymentPurpose,
-      );
-      return res.status(200).send("OK");
-    }
-
+    if (!invoiceMatch) return res.status(200).send("OK");
     const invoiceNumber = invoiceMatch[0];
 
-    // 🚨 ROBUST FIX: Search the Payment table, NOT the Order table!
     const paymentRecord = await prisma.payment.findFirst({
-      where: {
-        providerTxId: invoiceNumber,
-        provider: "b2b_invoice",
-      },
+      where: { providerTxId: invoiceNumber, provider: "b2b_invoice" },
       include: { user: true },
     });
 
-    if (!paymentRecord) {
-      console.error("Invoice not found in the Payment system:", invoiceNumber);
+    if (!paymentRecord || paymentRecord.status === "COMPLETED")
       return res.status(200).send("OK");
-    }
 
-    if (
-      paymentRecord.status === "COMPLETED" ||
-      paymentRecord.status === "FAILED"
-    ) {
-      return res.status(200).send("OK"); // Already processed
-    }
-
-    if (amountReceived < paymentRecord.amount) {
-      console.warn(`Incomplete B2B payment for invoice ${invoiceNumber}.`);
-      return res.status(200).send("OK");
-    }
-
-    // 2. Extract Metadata (Plan, Interval, Promo)
-    const metadata = paymentRecord.metadata || {};
-    const { planId, interval, promoCodeId, discountAmount } = metadata;
-
+    const { planId, interval, promoCodeId, discountAmount } =
+      paymentRecord.metadata || {};
     const plan = await prisma.subscriptionPlan.findUnique({
       where: { id: planId },
     });
 
-    if (!plan) {
-      console.error(`B2B Webhook Error: Plan ${planId} not found.`);
-      return res.status(200).send("OK");
-    }
-
-    let monthsToAdd = 1;
-    if (interval === "half_year") monthsToAdd = 6;
-    if (interval === "year") monthsToAdd = 12;
-
+    let monthsToAdd =
+      interval === "year" ? 12 : interval === "half_year" ? 6 : 1;
     const startDate = new Date();
     const endDate = new Date();
     endDate.setMonth(startDate.getMonth() + monthsToAdd);
 
-    // 3. Activate the subscription securely
     await prisma.$transaction(async (tx) => {
-      // Mark Payment as COMPLETED
       await tx.payment.update({
         where: { id: paymentRecord.id },
         data: { status: "COMPLETED" },
       });
-
       await tx.userSubscription.updateMany({
         where: { userId: paymentRecord.userId, status: "ACTIVE" },
         data: { status: "EXPIRED" },
       });
-
       await tx.userSubscription.upsert({
         where: { userId: paymentRecord.userId },
         update: {
-          planId: planId,
+          planId,
           status: "ACTIVE",
-          startDate: startDate,
-          endDate: endDate,
+          startDate,
+          endDate,
           pricePaid: amountReceived,
           promoCodeId: promoCodeId || null,
           discountAmount: discountAmount || null,
         },
         create: {
           userId: paymentRecord.userId,
-          planId: planId,
+          planId,
           status: "ACTIVE",
-          startDate: startDate,
-          endDate: endDate,
+          startDate,
+          endDate,
           pricePaid: amountReceived,
           promoCodeId: promoCodeId || null,
           discountAmount: discountAmount || null,
@@ -411,23 +379,17 @@ export const handleTinkoffB2BSubscriptionPurchase = async (req, res) => {
       });
     });
 
-    console.log(
-      `✅ B2B Subscription [${plan?.name}] activated for user ${paymentRecord.userId}`,
-    );
-
-    // Send receipt
     processSubscriptionDelivery(
       paymentRecord,
       paymentRecord.user,
       plan,
       amountReceived,
       interval,
-    ).catch((err) => console.error("Async Subscription Email Error:", err));
-
-    return res.status(200).send("OK");
+    ).catch(console.error);
+    res.status(200).send("OK");
   } catch (error) {
-    console.error("Error processing B2B payment:", error);
-    res.status(500).send("Internal Server Error");
+    console.error("B2B Webhook Error:", error);
+    res.status(200).send("OK");
   }
 };
 
@@ -443,12 +405,6 @@ async function processSubscriptionDelivery(
   interval,
 ) {
   try {
-    if (!user || !user.email) {
-      throw new Error("Cannot send email: User or User Email not found");
-    }
-
-    console.log(`Generating Subscription PDF for: ${user.email}`);
-
     const pdfBuffer = await generateSubscriptionReceiptPDF(
       paymentRecord,
       user,
@@ -456,7 +412,6 @@ async function processSubscriptionDelivery(
       amount,
       interval,
     );
-
     await sendSubscriptionReceiptEmail(
       user.email,
       user.name,
@@ -464,26 +419,21 @@ async function processSubscriptionDelivery(
       amount,
       pdfBuffer,
     );
-
-    console.log(`✅ Subscription email sent to: ${user.email}`);
   } catch (error) {
-    console.error("❌ processSubscriptionDelivery error:", error);
+    console.error("Subscription Delivery Error:", error);
   }
 }
 
 async function processTicketDelivery(order) {
   try {
-    console.log(`Generating Event Ticket PDF for Order: ${order.id}`);
     const pdfBuffer = await generateTicketPDF(order, order.event, order.user);
-
     await sendTicketEmail(
       order.user.email,
       order.user.name,
       order.event.title,
       pdfBuffer,
     );
-    console.log(`✅ Event Ticket email sent to: ${order.user.email}`);
   } catch (error) {
-    console.error("❌ processTicketDelivery error:", error);
+    console.error("Ticket Delivery Error:", error);
   }
 }

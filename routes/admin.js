@@ -17,6 +17,10 @@ const router = Router();
 // Middleware: All routes require authentication
 router.use(verifyAuth);
 
+// =================================================================
+//                 USER MANAGEMENT ROUTES
+// =================================================================
+
 // --- 1. GET ALL USERS (Admin & Support) ---
 router.get(
   "/users",
@@ -25,31 +29,30 @@ router.get(
     try {
       const users = await prisma.user.findMany({
         where: {
-          role: {
-            in: ["administrator", "support"],
-          },
+          role: { in: ["administrator", "support"] },
         },
         select: {
           id: true,
           name: true,
           email: true,
           role: true,
-          status: true,
-          created_at: true,
+          createdAt: true,
+          moderationStatus: true,
         },
-        orderBy: { created_at: "desc" },
+        orderBy: { createdAt: "desc" },
       });
       res.json(users);
     } catch (error) {
+      console.error("Fetch users error:", error);
       res.status(500).json({ message: "Error fetching users" });
     }
   },
 );
 
-// --- 2. CREATE USER (administrator Only) ---
+// --- 2. CREATE USER (Administrator Only) ---
 router.post("/user", requireRole(["administrator"]), async (req, res) => {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name, role, status } = req.body;
 
     if (!email || !password || !role) {
       return res.status(400).json({ message: "Missing required fields" });
@@ -68,7 +71,7 @@ router.post("/user", requireRole(["administrator"]), async (req, res) => {
         password: hashedPassword,
         name,
         role,
-        status: "active",
+        moderationStatus: status,
       },
     });
 
@@ -76,22 +79,23 @@ router.post("/user", requireRole(["administrator"]), async (req, res) => {
       .status(201)
       .json({ message: "User created successfully", userId: newUser.id });
   } catch (error) {
-    console.error(error);
+    console.error("Create User Error:", error);
     res.status(500).json({ message: "Error creating user" });
   }
 });
 
-// --- 3. UPDATE USER (administrator Only) ---
+// --- 3. UPDATE USER (Administrator Only) ---
 router.put("/user/:id", requireRole(["administrator"]), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, role, status, password } = req.body;
+    const { name, role, password, status } = req.body;
 
-    const dataToUpdate = { name, role, status };
+    const dataToUpdate = { name, role };
 
     if (password && password.trim() !== "") {
       dataToUpdate.password = await bcrypt.hash(password, 10);
     }
+    dataToUpdate.moderationStatus = status;
 
     await prisma.user.update({
       where: { id },
@@ -100,11 +104,12 @@ router.put("/user/:id", requireRole(["administrator"]), async (req, res) => {
 
     res.json({ message: "User updated successfully" });
   } catch (error) {
+    console.error("Update user error:", error);
     res.status(500).json({ message: "Error updating user" });
   }
 });
 
-// --- 4. DELETE USER (administrator Only) ---
+// --- 4. DELETE USER (Administrator Only) ---
 router.delete("/user/:id", requireRole(["administrator"]), async (req, res) => {
   try {
     const { id } = req.params;
@@ -118,321 +123,156 @@ router.delete("/user/:id", requireRole(["administrator"]), async (req, res) => {
     await prisma.user.delete({ where: { id } });
     res.json({ message: "User deleted successfully" });
   } catch (error) {
+    console.error("Delete user error:", error);
     res.status(500).json({ message: "Error deleting user" });
   }
 });
 
 // =================================================================
-//                 🆕 PERFORMER DETAILS ROUTE
+//                 DASHBOARD & BUSINESS ROUTES
 // =================================================================
 
 router.get(
-  "/performers/:id",
+  "/dashboard",
   requireRole(["administrator", "support"]),
   async (req, res) => {
     try {
-      const { id } = req.params;
-
-      const performer = await prisma.user.findUnique({
-        where: { id },
-        include: {
-          gallery_items: { orderBy: { created_at: "desc" } },
-          certificates: { orderBy: { created_at: "desc" } },
-          recommendation_letters: { orderBy: { created_at: "desc" } },
-          bookings_as_performer: {
-            include: {
-              customer: {
-                select: { id: true, name: true, email: true, phone: true },
-              },
-            },
-            orderBy: { createdAt: "desc" },
-          },
-          events: { orderBy: { createdAt: "desc" } },
-        },
-      });
-
-      if (!performer) {
-        return res.status(404).json({ message: "Performer not found" });
-      }
-
-      const mappedData = {
-        id: performer.id,
-        name: performer.name,
-        email: performer.email,
-        phone: performer.phone,
-        city: performer.city,
-        accountType: performer.account_type,
-        companyName: performer.company_name,
-        inn: performer.inn,
-        description: performer.description,
-        profilePicture: performer.profile_picture,
-        backgroundPicture: performer.background_picture,
-        roles: performer.roles || [],
-        priceRange: performer.price_range || [],
-        moderationStatus: performer.moderation_status,
-        status: performer.status,
-        createdAt: performer.created_at,
-        gallery: performer.gallery_items.map((g) => ({
-          id: g.id,
-          title: g.title,
-          imageUrls: g.image_urls,
-          description: g.description,
-          moderationStatus: g.moderation_status,
-          createdAt: g.created_at,
-        })),
-        certificates: performer.certificates.map((c) => ({
-          id: c.id,
-          fileUrl: c.file_url,
-          description: c.description,
-          moderationStatus: c.moderation_status,
-          createdAt: c.created_at,
-        })),
-        recommendationLetters: performer.recommendation_letters.map((l) => ({
-          id: l.id,
-          fileUrl: l.file_url,
-          description: l.description,
-          moderationStatus: l.moderation_status,
-          createdAt: l.created_at,
-        })),
-        bookings: performer.bookings_as_performer.map((b) => ({
-          id: b.id,
-          date: b.date,
-          status: b.status,
-          price: b.price,
-          details: b.details,
-          createdAt: b.created_at,
-          customerName: b.customer?.name || "Неизвестно",
-          customerEmail: b.customer?.email,
-          customerPhone: b.customer?.phone,
-        })),
-        events:
-          performer.events?.map((e) => ({
-            id: e.id,
-            title: e.title,
-            date: e.date,
-            status: e.status,
-            city: e.city,
-            price: e.price,
-            imageUrl: e.image_url,
-            createdAt: e.created_at,
-          })) || [],
-      };
-
-      res.status(200).json(mappedData);
+      const data = await adminService.getAdminDashboardData();
+      res.json(data);
     } catch (error) {
-      console.error("Error fetching admin performer details:", error);
-      res.status(500).json({ message: "Internal server error" });
+      res
+        .status(500)
+        .json({ error: "Failed to fetch administrator dashboard data" });
+    }
+  },
+);
+
+router.put(
+  "/payouts/:payoutId/approve",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      await adminService.approvePayout(req.params.payoutId);
+      res.status(200).send();
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+router.put(
+  "/payouts/:payoutId/reject",
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      await adminService.rejectPayout(req.params.payoutId);
+      res.status(200).send();
+    } catch (error) {
+      res.status(400).json({ error: error.message });
     }
   },
 );
 
 // =================================================================
-//                 🆕 CUSTOMER DETAILS ROUTE
+//                 MODERATION ROUTES
 // =================================================================
 
-router.get(
-  "/customers/:id",
+router.patch(
+  "/profile/moderation/:id",
   requireRole(["administrator", "support"]),
   async (req, res) => {
     try {
       const { id } = req.params;
 
-      // 1. Fetch the customer and their related data
-      const customer = await prisma.user.findUnique({
-        where: { id },
-        include: {
-          // Fetch all bookings where this user is the customer
-          bookings_as_customer: {
-            include: {
-              performer: {
-                select: { id: true, name: true, email: true, phone: true },
-              },
-            },
-            orderBy: { createdAt: "desc" }, // Adjust to created_at if your schema uses snake_case here
-          },
-          // Fetch all paid requests/transactions
-          paid_requests: {
-            orderBy: { createdAt: "desc" }, // Adjust to created_at if your schema uses snake_case here
-          },
-        },
-      });
+      // 🚨 Safely handle both camelCase and snake_case from incoming requests
+      const { userType } = req.body;
+      const moderationStatus =
+        req.body.moderationStatus || req.body.moderation_status;
 
-      if (!customer) {
-        return res.status(404).json({ message: "Customer not found" });
+      const validStatuses = ["PENDING", "APPROVED", "REJECTED", "BLOCKED"];
+      if (!validStatuses.includes(moderationStatus)) {
+        return res.status(400).json({ message: "Invalid moderation status" });
       }
 
-      // 2. Calculate the quick stats for the UI
-      const totalBookings = customer.bookings_as_customer.length;
-      const confirmedBookings = customer.bookings_as_customer.filter(
-        (b) => b.status === "confirmed" || b.status === "completed",
-      ).length;
-      const totalPaidRequests = customer.paid_requests.length;
+      let updatedProfile;
 
-      // 3. Map the data exactly to the frontend interface (AdminCustomerDetails)
-      const mappedData = {
-        id: customer.id,
-        name: customer.name || "Unknown User",
-        email: customer.email,
-        phone: customer.phone,
-        city: customer.city,
-        profilePicture: customer.profile_picture,
-        moderationStatus: customer.moderation_status,
-        status: customer.status,
-        createdAt: customer.created_at,
+      if (userType === "customer") {
+        updatedProfile = await prisma.customerProfile.update({
+          where: { userId: id },
+          data: { moderationStatus },
+          include: { user: true },
+        });
+        await invalidatePattern("users:customers_p*");
+      } else if (userType === "performer") {
+        updatedProfile = await prisma.performerProfile.update({
+          where: { userId: id },
+          data: { moderationStatus },
+          include: { user: true },
+        });
+        await invalidatePattern("users:performers_p*");
+      } else if (userType === "partner") {
+        updatedProfile = await prisma.partnerProfile.update({
+          where: { userId: id },
+          data: { moderationStatus },
+          include: { user: true },
+        });
+        await invalidatePattern("users:partners_p*");
+      } else {
+        // Fallback updates base user
+        updatedProfile = await prisma.user.update({
+          where: { id: id },
+          data: { moderationStatus },
+          include: { user: true },
+        });
+        updatedProfile.user = updatedProfile;
+      }
 
-        // Map Bookings
-        bookings: customer.bookings_as_customer.map((b) => ({
-          id: b.id,
-          date: b.date,
-          status: b.status,
-          price: b.price,
-          details: b.details,
-          createdAt: b.createdAt,
-          performerName: b.performer?.name || "Неизвестный исполнитель",
-          performerEmail: b.performer?.email,
-          performerPhone: b.performer?.phone,
-        })),
+      // 1. Send Background Email
+      sendModerationStatusEmail(
+        updatedProfile.user.email,
+        updatedProfile.user.name,
+        updatedProfile.moderationStatus,
+      ).catch((err) => console.error("Background email failed:", err));
 
-        // Map Paid Requests (Transactions)
-        paidRequests: customer.paid_requests.map((pr) => ({
-          id: pr.id,
-          status: pr.status,
-          amount: pr.amount,
-          description: pr.description,
-          createdAt: pr.createdAt || pr.created_at,
-        })),
+      // 2. SEND ROBUST PUSH NOTIFICATION
+      let notifTitle = "Модерация профиля";
+      let notifBody = "Ваш профиль ожидает проверки.";
+      let url = "/users";
 
-        // Attach Calculated Stats
-        stats: {
-          totalBookings,
-          confirmedBookings,
-          totalPaidRequests,
-        },
-      };
+      if (moderationStatus === "APPROVED") {
+        notifTitle = "🎉 Профиль одобрен!";
+        notifBody = "Ваш профиль успешно прошел модерацию и теперь активен.";
+      } else if (moderationStatus === "REJECTED") {
+        notifTitle = "⚠️ Отклонение профиля";
+        notifBody =
+          "Ваш профиль не прошел модерацию. Пожалуйста, проверьте данные.";
+      }
 
-      res.status(200).json(mappedData);
+      if (userType === "customer") url = "/customer-profile";
+      else if (userType === "performer") url = "/performer-profile";
+      else if (userType === "partner") url = "/dashboard";
+
+      await notifyUser({
+        userId: id,
+        title: notifTitle,
+        body: notifBody,
+        type: "MODERATION_UPDATE",
+        data: { url: url },
+      });
+
+      return res.status(200).json({
+        message: "Moderation status updated successfully",
+        data: { moderationStatus: updatedProfile.moderationStatus },
+      });
     } catch (error) {
-      console.error("Error fetching admin customer details:", error);
-      res.status(500).json({ message: "Internal server error" });
+      console.error("Error updating status:", error.message);
+      return res.status(500).json({ message: "Server error updating status" });
     }
   },
 );
 
 // =================================================================
-
-router.get("/dashboard", async (req, res) => {
-  try {
-    const data = await adminService.getAdminDashboardData();
-    res.json(data);
-  } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Failed to fetch administrator dashboard data" });
-  }
-});
-
-router.put("/profiles/:userId/approve", async (req, res) => {
-  try {
-    await adminService.approveProfile(req.params.userId);
-    res.status(200).send();
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
-
-router.put("/profiles/:userId/reject", async (req, res) => {
-  try {
-    await adminService.rejectProfile(req.params.userId);
-    res.status(200).send();
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
-
-router.put("/payouts/:payoutId/approve", async (req, res) => {
-  try {
-    await adminService.approvePayout(req.params.payoutId);
-    res.status(200).send();
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
-
-router.put("/payouts/:payoutId/reject", async (req, res) => {
-  try {
-    await adminService.rejectPayout(req.params.payoutId);
-    res.status(200).send();
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
-
-router.patch("/profile/moderation/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { moderation_status } = req.body;
-
-    const validStatuses = ["approved", "pending_approval", "rejected"];
-    if (!validStatuses.includes(moderation_status)) {
-      return res.status(400).json({ message: "Invalid moderation status" });
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id },
-      data: { moderation_status },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        moderation_status: true,
-      },
-    });
-
-    await invalidatePattern("users:performers_p*");
-
-    // 1. Send Background Email
-    sendModerationStatusEmail(
-      updatedUser.email,
-      updatedUser.name,
-      updatedUser.moderation_status,
-    ).catch((err) => console.error("Background email failed:", err));
-
-    // 🚨 2. SEND ROBUST PUSH NOTIFICATION
-    let notifTitle = "Модерация профиля";
-    let notifBody = "Ваш профиль ожидает проверки.";
-    if (moderation_status === "approved") {
-      notifTitle = "🎉 Профиль одобрен!";
-      notifBody =
-        "Ваш профиль успешно прошел модерацию и теперь виден заказчикам.";
-    } else if (moderation_status === "rejected") {
-      notifTitle = "⚠️ Отклонение профиля";
-      notifBody =
-        "Ваш профиль не прошел модерацию. Пожалуйста, проверьте данные.";
-    }
-
-    await notifyUser({
-      userId: updatedUser.id,
-      title: notifTitle,
-      body: notifBody,
-      type: "MODERATION_UPDATE",
-      data: { url: "/performer-profile" }, // Directs user to their profile
-    });
-
-    console.log(
-      `Updated user ${id} to ${moderation_status} and cleared cache.`,
-    );
-    return res.status(200).json({
-      message: "Moderation status updated successfully",
-      data: updatedUser,
-    });
-  } catch (error) {
-    console.error("Error updating status:", error.message);
-    return res.status(500).json({ message: "Server error updating status" });
-  }
-});
-
-// =================================================================
-//                 🆕 BOOKING MANAGEMENT ROUTES
+//                 BOOKING MANAGEMENT ROUTES
 // =================================================================
 
 router.get(
@@ -450,8 +290,16 @@ router.get(
       if (search) {
         where.OR = [
           { id: { contains: search, mode: "insensitive" } },
-          { customer: { name: { contains: search, mode: "insensitive" } } },
-          { performer: { name: { contains: search, mode: "insensitive" } } },
+          {
+            customer: {
+              user: { name: { contains: search, mode: "insensitive" } },
+            },
+          },
+          {
+            performer: {
+              user: { name: { contains: search, mode: "insensitive" } },
+            },
+          },
         ];
       }
 
@@ -459,27 +307,36 @@ router.get(
         where,
         include: {
           customer: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              profile_picture: true,
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                  image: true, // 🚨 camelCase match with User schema
+                },
+              },
             },
           },
           performer: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              profile_picture: true,
+            include: {
+              user: {
+                select: { id: true, name: true, email: true, image: true },
+              },
             },
           },
         },
         orderBy: { createdAt: "desc" },
       });
 
-      res.json(bookings);
+      const flattenedBookings = bookings.map((b) => ({
+        ...b,
+        customer: b.customer.user,
+        performer: b.performer.user,
+      }));
+
+      res.json(flattenedBookings);
     } catch (error) {
       console.error("Fetch bookings error:", error);
       res.status(500).json({ message: "Error fetching bookings" });
@@ -499,37 +356,35 @@ router.patch(
         "PENDING",
         "CONFIRMED",
         "REJECTED",
-        "COMPLETED",
-        "CANCELLED",
-        "DISPUTED",
+        "FULFILLED",
+        "CANCELLED_BY_CUSTOMER",
       ];
       if (!validStatuses.includes(status)) {
-        return res.status(400).json({ message: "Invalid status value" });
+        return res
+          .status(400)
+          .json({ message: "Invalid booking status value" });
       }
 
       const updatedBooking = await prisma.booking.update({
         where: { id },
         data: { status },
         include: {
-          customer: { select: { id: true } },
-          performer: { select: { id: true } },
+          customer: { select: { userId: true } },
+          performer: { select: { userId: true } },
         },
       });
 
-      // 🚨 SEND REAL-TIME NOTIFICATIONS VIA NOTIFY-USER DISPATCHER
       try {
-        // 1. Notify Customer
         await notifyUser({
-          userId: updatedBooking.customerId,
+          userId: updatedBooking.customer.userId,
           title: "Обновление бронирования",
           body: `Статус вашего бронирования изменен администратором на: ${status}`,
           type: "BOOKING_UPDATE",
           data: { bookingId: id, status, url: "/customer-profile/bookings" },
         });
 
-        // 2. Notify Performer
         await notifyUser({
-          userId: updatedBooking.performerId,
+          userId: updatedBooking.performer.userId,
           title: "Обновление бронирования",
           body: `Администратор изменил статус бронирования #${id.slice(-4)} на: ${status}`,
           type: "BOOKING_UPDATE",
@@ -553,11 +408,6 @@ router.delete(
   async (req, res) => {
     try {
       const { id } = req.params;
-
-      const booking = await prisma.booking.findUnique({ where: { id } });
-      if (!booking)
-        return res.status(404).json({ message: "Booking not found" });
-
       await prisma.booking.delete({ where: { id } });
       res.json({ message: "Booking deleted successfully" });
     } catch (error) {
@@ -567,129 +417,30 @@ router.delete(
   },
 );
 
-router.get(
-  "/partnership-requests",
-  requireRole(["administrator"]),
-  async (req, res) => {
-    const requests = await prisma.partnershipRequest.findMany({
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(requests);
-  },
-);
-
-router.patch(
-  "/partnership-requests/:id/status",
-  requireRole(["administrator"]),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body;
-
-      if (!["APPROVED", "REJECTED"].includes(status)) {
-        return res.status(400).json({ message: "Некорректный статус" });
-      }
-
-      const request = await prisma.partnershipRequest.findUnique({
-        where: { id },
-      });
-      if (!request)
-        return res.status(404).json({ message: "Заявка не найдена" });
-
-      const updatedRequest = await prisma.partnershipRequest.update({
-        where: { id },
-        data: { status },
-      });
-
-      if (status === "APPROVED") {
-        let user = await prisma.user.findUnique({
-          where: { email: request.email },
-        });
-        let tempPassword = null;
-
-        if (!user) {
-          tempPassword = "Test1234";
-          const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-          user = await prisma.user.create({
-            data: {
-              email: request.email,
-              password: hashedPassword,
-              name: request.name,
-              role: "partner",
-              status: "active",
-            },
-          });
-
-          const namePrefix = request.name
-            .substring(0, 4)
-            .toUpperCase()
-            .replace(/[^A-Z]/g, "P");
-          const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-          const referralId = `REF-${namePrefix}${randomSuffix}`;
-
-          await prisma.partner.create({
-            data: {
-              userId: user.id,
-              referralId: referralId,
-              balance: 0,
-              minPayout: 1500,
-            },
-          });
-
-          await sendPartnerApprovalEmail(
-            request.email,
-            request.name,
-            tempPassword,
-          );
-        } else {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { role: "partner" },
-          });
-
-          // 🚨 IF USER ALREADY EXISTS, NOTIFY THEM IN-APP
-          await notifyUser({
-            userId: user.id,
-            title: "🤝 Партнерская программа",
-            body: "Ваша заявка на партнерство одобрена! Добро пожаловать в команду.",
-            type: "PARTNER_APPROVED",
-            data: { url: "/partner-dashboard" },
-          });
-        }
-      }
-
-      res.status(200).json({
-        message: `Заявка успешно ${status === "APPROVED" ? "одобрена" : "отклонена"}`,
-        data: updatedRequest,
-      });
-    } catch (error) {
-      console.error("Error updating partnership status:", error);
-      res.status(500).json({ message: "Внутренняя ошибка сервера" });
-    }
-  },
-);
+// =================================================================
+//                 NOTIFICATION PUSH LOGIC
+// =================================================================
 
 router.post(
   "/notifications/send",
-  verifyAuth,
   requireRole(["administrator"]),
   async (req, res) => {
     const { type, target, title, body } = req.body;
-    console.log(req.body);
 
-    if (!type || !target || !title || !body) {
+    if (!type || !["topic", "token"].includes(type)) {
+      return res
+        .status(400)
+        .json({ error: "Type must be either 'topic' or 'token'" });
+    }
+    if (!target || !title || !body) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     try {
-      // 1. ✅ FIX: Pass a proper data object instead of 'target'
       const response = await sendPushNotification(type, title, body, target, {
         url: "/",
       });
 
-      console.log(response);
-      // 2. Log Success to PostgreSQL via Prisma
       await prisma.notificationLog.create({
         data: {
           title,
@@ -705,7 +456,6 @@ router.post(
     } catch (error) {
       console.error("FCM Error:", error);
 
-      // 3. Log Failure to PostgreSQL
       try {
         await prisma.notificationLog.create({
           data: {
@@ -728,19 +478,21 @@ router.post(
   },
 );
 
-router.get("/notifications/history", async (req, res) => {
-  try {
-    const logs = await prisma.notificationLog.findMany({
-      take: 50,
-      orderBy: {
-        sentAt: "desc",
-      },
-    });
-    res.json(logs);
-  } catch (error) {
-    console.error("Prisma Error:", error);
-    res.status(500).json({ error: "Failed to fetch history" });
-  }
-});
+router.get(
+  "/notifications/history",
+  requireRole(["administrator", "support"]),
+  async (req, res) => {
+    try {
+      const logs = await prisma.notificationLog.findMany({
+        take: 50,
+        orderBy: { sentAt: "desc" },
+      });
+      res.json(logs);
+    } catch (error) {
+      console.error("Prisma Error:", error);
+      res.status(500).json({ error: "Failed to fetch history" });
+    }
+  },
+);
 
 export default router;

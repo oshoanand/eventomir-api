@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import prisma from "../libs/prisma.js";
+import jwt from "jsonwebtoken";
 import { createUploader } from "../utils/multer.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { invalidatePattern } from "../libs/redis.js";
@@ -16,12 +17,11 @@ import { optimizeAndUpload } from "../utils/imageProcessor.js";
 
 const router = Router();
 
-// 1. Configure Standard Multer Instances (Uses your util for Images/PDFs)
+// 1. Configure Standard Multer Instances
 const performerUploader = createUploader(5); // 5MB limit
 const documentUploader = createUploader(10); // 10MB limit for docs
 
-// 2. NEW: Configure Audio-Specific Multer Instance
-// We cannot use createUploader because it blocks audio MIME types.
+// 2. Audio-Specific Multer Instance
 const audioUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
@@ -39,6 +39,18 @@ const profileUploadFields = performerUploader.fields([
   { name: "backgroundPicture", maxCount: 1 },
 ]);
 
+// 3. Optional Auth Middleware
+const optionalAuth = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (token) {
+    try {
+      const secret = process.env.JWT_SECRET || process.env.SECRET;
+      req.user = jwt.verify(token, secret);
+    } catch (e) {}
+  }
+  next();
+};
+
 // ==========================================
 // --- MINIO HELPER FUNCTIONS ---
 // ==========================================
@@ -50,7 +62,6 @@ const safeDeleteMinioFile = async (fileUrl) => {
     if (fileUrl.startsWith(prefix)) {
       const fileKey = fileUrl.replace(prefix, "");
       await minioClient.removeObject(MINIO_BUCKET_NAME, fileKey);
-      console.log(`🗑️ MinIO: Deleted ${fileKey}`);
     }
   } catch (error) {
     console.error(`❌ MinIO: Failed to delete file: ${fileUrl}`, error);
@@ -61,16 +72,11 @@ const deleteMinioFolder = async (prefix) => {
   try {
     const objectsList = [];
     const stream = minioClient.listObjectsV2(MINIO_BUCKET_NAME, prefix, true);
-
     for await (const obj of stream) {
       objectsList.push(obj.name);
     }
-
     if (objectsList.length > 0) {
       await minioClient.removeObjects(MINIO_BUCKET_NAME, objectsList);
-      console.log(
-        `🗑️ MinIO: Deleted folder prefix ${prefix} (${objectsList.length} files)`,
-      );
     }
   } catch (err) {
     console.error(`❌ MinIO: Failed to delete folder prefix ${prefix}:`, err);
@@ -84,12 +90,10 @@ const uploadMediaOrDoc = async (
   imageWidth = 800,
 ) => {
   if (!file) return null;
-
   if (file.mimetype === "application/pdf") {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const filename = `${file.fieldname}-${uniqueSuffix}.pdf`;
     const fileKey = `${baseFolder}/${performerId}/${filename}`;
-
     await minioClient.putObject(
       MINIO_BUCKET_NAME,
       fileKey,
@@ -107,49 +111,76 @@ const uploadMediaOrDoc = async (
 // --- PROFILE MANAGEMENT ---
 // ==========================================
 
-router.get("/profile/:performerId", async (req, res) => {
+router.get("/profile/:performerId", optionalAuth, async (req, res) => {
   try {
     const { performerId } = req.params;
+    const currentUserId = req.user?.id;
+    const isOwner = currentUserId === performerId;
 
-    const user = await prisma.user.findUnique({
-      where: { id: performerId },
+    const profile = await prisma.performerProfile.findUnique({
+      where: { userId: performerId },
       include: {
-        reviews_received: true,
-        gallery_items: true,
+        user: true,
+        reviewsReceived: true,
+        galleryItems: true,
         certificates: true,
-        recommendation_letters: true,
-        audio_tracks: true,
-        bookings_as_performer: {
+        recommendations: true,
+        audioTracks: true,
+        bookingsReceived: {
           include: {
-            customer: { select: { name: true, email: true } },
+            customer: {
+              // 🚨 FIX: Removed 'city' because the User model doesn't have it anymore
+              select: { name: true, email: true, image: true },
+            },
           },
           orderBy: { date: "desc" },
+        },
+        feedPosts: {
+          where: isOwner ? undefined : { isPublic: true },
+          orderBy: { createdAt: "desc" },
+          include: {
+            _count: { select: { likes: true, comments: true } },
+            likes: currentUserId ? { where: { userId: currentUserId } } : false,
+            comments: {
+              include: {
+                user: { select: { id: true, name: true, image: true } },
+              },
+              orderBy: { createdAt: "asc" },
+            },
+          },
         },
       },
     });
 
-    if (!user) {
+    if (!profile)
       return res.status(404).json({ message: "Performer not found" });
-    }
 
     const mappedProfile = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      city: user.city,
-      description: user.description,
-      accountType: user.account_type,
-      profilePicture: user.profile_picture,
-      backgroundPicture: user.background_picture,
-      roles: user.roles || [],
-      priceRange: user.price_range || [],
-      moderationStatus: user.moderation_status,
-      gallery: user.gallery_items,
-      certificates: user.certificates,
-      recommendationLetters: user.recommendation_letters,
-      audioTracks: user.audio_tracks || [],
-      bookingRequests: user.bookings_as_performer.map((b) => ({
+      id: profile.user.id,
+      name: profile.user.name,
+      email: profile.user.email,
+      phone: profile.user.phone,
+      city: profile.city,
+      description: profile.description,
+      accountType: profile.accountType,
+      profilePicture: profile.user.image,
+      backgroundPicture: profile.backgroundPicture,
+      roles: profile.roles || [],
+      priceRange: profile.priceRange || [],
+      socialLinks: profile.socialLinks || {},
+      bankDetails: profile.bankDetails || [],
+      moderationStatus: profile.moderationStatus,
+      gallery: profile.galleryItems,
+      certificates: profile.certificates,
+      recommendationLetters: profile.recommendations,
+      audioTracks: profile.audioTracks || [],
+      feedPosts: profile.feedPosts.map((post) => ({
+        ...post,
+        likesCount: post._count.likes,
+        commentsCount: post._count.comments,
+        isLikedByMe: post.likes ? post.likes.length > 0 : false,
+      })),
+      bookingRequests: profile.bookingsReceived.map((b) => ({
         id: b.id,
         date: b.date,
         details: b.details,
@@ -157,9 +188,12 @@ router.get("/profile/:performerId", async (req, res) => {
         customerId: b.customerId,
         performerId: b.performerId,
         createdAt: b.createdAt,
+        // Using the safe fields we pulled above
         customerName: b.customer?.name || "Unknown Customer",
         customerEmail: b.customer?.email || null,
+        customerImage: b.customer?.image || null,
       })),
+      bookedDates: profile.bookedDates || [],
     };
 
     res.json(mappedProfile);
@@ -172,65 +206,59 @@ router.get("/profile/:performerId", async (req, res) => {
 router.patch("/:id", verifyAuth, profileUploadFields, async (req, res) => {
   try {
     const { id } = req.params;
-
-    if (req.user.id !== id) {
+    if (req.user.id !== id)
       return res.status(403).json({ message: "Forbidden" });
-    }
 
-    const { name, description, city, phone, roles, priceRange } = req.body;
-    const updateData = {};
+    const {
+      name,
+      description,
+      city,
+      phone,
+      roles,
+      priceRange,
+      socialLinks,
+      bankDetails,
+    } = req.body;
 
-    if (name) updateData.name = name;
-    if (description) updateData.description = description;
-    if (city) updateData.city = city;
-    if (phone) updateData.phone = phone;
+    const parsedPriceRange =
+      typeof priceRange === "string" ? JSON.parse(priceRange) : priceRange;
+    const parsedRoles = typeof roles === "string" ? JSON.parse(roles) : roles;
+    const parsedSocialLinks =
+      typeof socialLinks === "string" ? JSON.parse(socialLinks) : socialLinks;
+    const parsedBankDetails =
+      typeof bankDetails === "string" ? JSON.parse(bankDetails) : bankDetails;
 
-    if (priceRange) {
-      try {
-        updateData.price_range =
-          typeof priceRange === "string" ? JSON.parse(priceRange) : priceRange;
-      } catch (e) {}
-    }
-    if (roles) {
-      try {
-        updateData.roles =
-          typeof roles === "string" ? JSON.parse(roles) : roles;
-      } catch (e) {}
-    }
+    const userUpdate = { name, phone };
+    const profileUpdate = {
+      description,
+      city,
+      roles: parsedRoles,
+      priceRange: parsedPriceRange,
+      socialLinks: parsedSocialLinks,
+      bankDetails: parsedBankDetails,
+    };
 
     if (req.files && req.files["profilePicture"]) {
-      const file = req.files["profilePicture"][0];
-      updateData.profile_picture = await uploadMediaOrDoc(
-        file,
+      userUpdate.image = await uploadMediaOrDoc(
+        req.files["profilePicture"][0],
         "performers/profile",
         id,
         600,
       );
-      const oldUser = await prisma.user.findUnique({
-        where: { id },
-        select: { profile_picture: true },
-      });
-      await safeDeleteMinioFile(oldUser?.profile_picture);
     }
-
     if (req.files && req.files["backgroundPicture"]) {
-      const file = req.files["backgroundPicture"][0];
-      updateData.background_picture = await uploadMediaOrDoc(
-        file,
+      profileUpdate.backgroundPicture = await uploadMediaOrDoc(
+        req.files["backgroundPicture"][0],
         "performers/backgrounds",
         id,
         1920,
       );
-      const oldUser = await prisma.user.findUnique({
-        where: { id },
-        select: { background_picture: true },
-      });
-      await safeDeleteMinioFile(oldUser?.background_picture);
     }
 
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: { ...updateData },
+      data: { ...userUpdate, performerProfile: { update: profileUpdate } },
+      include: { performerProfile: true },
     });
 
     await invalidatePattern("search:performers:*");
@@ -239,8 +267,8 @@ router.patch("/:id", verifyAuth, profileUploadFields, async (req, res) => {
       message: "Profile updated successfully",
       profile: {
         ...updatedUser,
-        profilePicture: updatedUser.profile_picture,
-        backgroundPicture: updatedUser.background_picture,
+        ...updatedUser.performerProfile,
+        profilePicture: updatedUser.image,
       },
     });
   } catch (error) {
@@ -262,7 +290,8 @@ router.delete("/:id", verifyAuth, async (req, res) => {
     await deleteMinioFolder(`performers/gallery/${id}/`);
     await deleteMinioFolder(`performers/certificates/${id}/`);
     await deleteMinioFolder(`performers/letters/${id}/`);
-    await deleteMinioFolder(`performers/audio/${id}/`); // Ensure audio is deleted
+    await deleteMinioFolder(`performers/audio/${id}/`);
+    await deleteMinioFolder(`performers/feed/${id}/`);
 
     await invalidatePattern("search:performers:*");
 
@@ -270,6 +299,42 @@ router.delete("/:id", verifyAuth, async (req, res) => {
   } catch (error) {
     console.error("Delete Performer Error:", error);
     res.status(500).json({ message: "Failed to delete profile." });
+  }
+});
+
+// ==========================================
+// --- 🗓️ CALENDAR MANAGEMENT ---
+// ==========================================
+
+router.patch("/:id/calendar", verifyAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { bookedDates } = req.body;
+
+    // Security Check: Only the performer can edit their calendar
+    if (req.user.id !== id) {
+      return res.status(403).json({ message: "Доступ запрещен" });
+    }
+
+    // Ensure bookedDates is an array of valid ISO dates
+    const parsedDates = Array.isArray(bookedDates)
+      ? bookedDates.map((date) => new Date(date).toISOString())
+      : [];
+
+    const updatedProfile = await prisma.performerProfile.update({
+      where: { userId: id },
+      data: {
+        bookedDates: parsedDates,
+      },
+    });
+
+    res.status(200).json({
+      message: "Календарь обновлен",
+      bookedDates: updatedProfile.bookedDates,
+    });
+  } catch (error) {
+    console.error("Update Calendar Error:", error);
+    res.status(500).json({ message: "Ошибка обновления календаря" });
   }
 });
 
@@ -285,12 +350,14 @@ router.post(
     try {
       const { id } = req.params;
       const { title, description } = req.body;
-
       if (req.user.id !== id)
         return res.status(403).json({ message: "Forbidden" });
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
 
+      const profile = await prisma.performerProfile.findUnique({
+        where: { userId: id },
+      });
       const fileUrl = await uploadMediaOrDoc(
         req.file,
         "performers/gallery",
@@ -300,11 +367,11 @@ router.post(
 
       const galleryItem = await prisma.galleryItem.create({
         data: {
-          performer_id: id,
+          performerId: profile.id,
           title: title || "Без названия",
           description: description || "",
-          image_urls: [fileUrl],
-          moderation_status: "pending_approval",
+          imageUrls: [fileUrl],
+          moderationStatus: "PENDING",
         },
       });
 
@@ -325,11 +392,8 @@ router.delete("/:id/gallery/:itemId", verifyAuth, async (req, res) => {
     if (!item) return res.status(404).json({ message: "Item not found" });
 
     await prisma.galleryItem.delete({ where: { id: itemId } });
-
-    if (item.image_urls && Array.isArray(item.image_urls)) {
-      for (const url of item.image_urls) {
-        await safeDeleteMinioFile(url);
-      }
+    if (item.imageUrls) {
+      for (const url of item.imageUrls) await safeDeleteMinioFile(url);
     }
 
     res.status(200).json({ message: "Gallery item deleted" });
@@ -346,12 +410,14 @@ router.post(
     try {
       const { id } = req.params;
       const { description } = req.body;
-
       if (req.user.id !== id)
         return res.status(403).json({ message: "Forbidden" });
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
 
+      const profile = await prisma.performerProfile.findUnique({
+        where: { userId: id },
+      });
       const fileUrl = await uploadMediaOrDoc(
         req.file,
         "performers/certificates",
@@ -361,10 +427,10 @@ router.post(
 
       const cert = await prisma.certificate.create({
         data: {
-          performer_id: id,
-          file_url: fileUrl,
+          performerId: profile.id,
+          fileUrl: fileUrl,
           description: description || "",
-          moderation_status: "pending_approval",
+          moderationStatus: "PENDING",
         },
       });
 
@@ -385,7 +451,7 @@ router.delete("/:id/certificates/:itemId", verifyAuth, async (req, res) => {
     if (!cert) return res.status(404).json({ message: "Not found" });
 
     await prisma.certificate.delete({ where: { id: itemId } });
-    await safeDeleteMinioFile(cert.file_url);
+    await safeDeleteMinioFile(cert.fileUrl);
 
     res.status(200).json({ message: "Deleted" });
   } catch (error) {
@@ -401,12 +467,14 @@ router.post(
     try {
       const { id } = req.params;
       const { description } = req.body;
-
       if (req.user.id !== id)
         return res.status(403).json({ message: "Forbidden" });
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
 
+      const profile = await prisma.performerProfile.findUnique({
+        where: { userId: id },
+      });
       const fileUrl = await uploadMediaOrDoc(
         req.file,
         "performers/letters",
@@ -416,10 +484,10 @@ router.post(
 
       const letter = await prisma.recommendationLetter.create({
         data: {
-          performer_id: id,
-          file_url: fileUrl,
+          performerId: profile.id,
+          fileUrl: fileUrl,
           description: description || "",
-          moderation_status: "pending_approval",
+          moderationStatus: "PENDING",
         },
       });
 
@@ -442,7 +510,7 @@ router.delete("/:id/letters/:itemId", verifyAuth, async (req, res) => {
     if (!letter) return res.status(404).json({ message: "Letter not found" });
 
     await prisma.recommendationLetter.delete({ where: { id: itemId } });
-    await safeDeleteMinioFile(letter.file_url);
+    await safeDeleteMinioFile(letter.fileUrl);
 
     res.status(200).json({ message: "Letter deleted" });
   } catch (error) {
@@ -461,17 +529,15 @@ router.post(
   async (req, res) => {
     try {
       const { title, performerId } = req.body;
-
-      if (req.user.id !== performerId) {
+      if (req.user.id !== performerId)
         return res.status(403).json({ message: "Unauthorized" });
-      }
-
-      if (!req.file) {
+      if (!req.file)
         return res.status(400).json({ message: "Аудиофайл обязателен" });
-      }
 
+      const profile = await prisma.performerProfile.findUnique({
+        where: { userId: performerId },
+      });
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      // Replace spaces and special chars to avoid MinIO path issues
       const safeOriginalName = req.file.originalname.replace(
         /[^a-zA-Z0-9.\-_]/g,
         "_",
@@ -486,13 +552,11 @@ router.post(
         { "Content-Type": req.file.mimetype },
       );
 
-      const fileUrl = `${MINIO_PUBLIC_URL}/${fileKey}`;
-
       const track = await prisma.audioTrack.create({
         data: {
-          performer_id: performerId,
+          performerId: profile.id,
           title: title || "Новый трек",
-          file_url: fileUrl,
+          fileUrl: `${MINIO_PUBLIC_URL}/${MINIO_BUCKET_NAME}/${fileKey}`,
         },
       });
 
@@ -507,19 +571,17 @@ router.post(
 router.delete("/audio/:trackId", verifyAuth, async (req, res) => {
   try {
     const { trackId } = req.params;
-
     const track = await prisma.audioTrack.findUnique({
       where: { id: trackId },
+      include: { performer: true },
     });
 
     if (!track) return res.status(404).json({ message: "Track not found" });
-
-    if (track.performer_id !== req.user.id) {
+    if (track.performer.userId !== req.user.id)
       return res.status(403).json({ message: "Unauthorized" });
-    }
 
     await prisma.audioTrack.delete({ where: { id: trackId } });
-    await safeDeleteMinioFile(track.file_url);
+    await safeDeleteMinioFile(track.fileUrl);
 
     res.status(200).json({ success: true });
   } catch (error) {
@@ -529,7 +591,7 @@ router.delete("/audio/:trackId", verifyAuth, async (req, res) => {
 });
 
 // ==========================================
-// --- BATCH FETCH & SEARCH ---
+// --- BATCH FETCH ---
 // ==========================================
 
 router.get("/batch", async (req, res) => {
@@ -540,37 +602,31 @@ router.get("/batch", async (req, res) => {
     const idList = ids.split(",").filter(Boolean);
     if (idList.length === 0) return res.status(200).json([]);
 
-    const performers = await prisma.user.findMany({
-      where: { id: { in: idList }, role: "performer" },
-      select: {
-        id: true,
-        name: true,
-        city: true,
-        roles: true,
-        price_range: true,
-        profile_picture: true,
-        description: true,
-        reviews_received: { select: { rating: true } },
+    const profiles = await prisma.performerProfile.findMany({
+      where: { userId: { in: idList } },
+      include: {
+        user: true,
+        reviewsReceived: { select: { rating: true } },
       },
     });
 
-    const formattedPerformers = performers.map((p) => {
-      const totalRating = p.reviews_received.reduce(
+    const formattedPerformers = profiles.map((p) => {
+      const totalRating = p.reviewsReceived.reduce(
         (sum, r) => sum + r.rating,
         0,
       );
       const avgRating =
-        p.reviews_received.length > 0
-          ? totalRating / p.reviews_received.length
+        p.reviewsReceived.length > 0
+          ? totalRating / p.reviewsReceived.length
           : null;
 
       return {
-        id: p.id,
-        name: p.name,
+        id: p.user.id,
+        name: p.user.name,
         city: p.city,
         roles: p.roles,
-        priceRange: p.price_range,
-        profilePicture: p.profile_picture,
+        priceRange: p.priceRange,
+        profilePicture: p.user.image,
         description: p.description,
         averageRating: avgRating,
       };

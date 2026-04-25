@@ -15,12 +15,27 @@ export const getAdminDashboardData = async () => {
     prisma.user.count({ where: { role: "customer" } }),
     prisma.user.count({ where: { role: "partner" } }),
     prisma.booking.count(),
-    prisma.payoutRequest.findMany({ where: { status: "pending" } }),
-    prisma.user.findMany({ where: { moderation_status: "pending" } }),
+
+    // 🚨 FIX: Use strict Enum "PENDING" and include nested User data via PartnerProfile
+    prisma.payoutRequest.findMany({
+      where: { status: "PENDING" },
+      include: {
+        partner: {
+          include: { user: true }, // Pulls email/name for the admin UI
+        },
+      },
+    }),
+
+    // 🚨 FIX: Moderation status now lives on PerformerProfile, default is "pending_approval"
+    prisma.performerProfile.findMany({
+      where: { moderation_status: "pending_approval" },
+      include: { user: true }, // Pulls the base user details for the UI
+    }),
   ]);
 
   const totalRevenue = await prisma.payment.aggregate({
     _sum: { amount: true },
+    where: { status: "COMPLETED" }, // 🚨 FIX: Only count actual successful revenue
   });
 
   return {
@@ -40,37 +55,43 @@ export const getAdminDashboardData = async () => {
 export const approvePayout = async (payoutId) => {
   return await prisma.payoutRequest.update({
     where: { id: payoutId },
-    data: { status: "completed" },
+    // 🚨 FIX: Use strict Enum "PAID" (or "APPROVED" depending on your exact workflow)
+    data: { status: "PAID" },
   });
 };
 
 export const rejectPayout = async (payoutId) => {
-  // Add the amount back to the partner's balance
   const payout = await prisma.payoutRequest.findUnique({
     where: { id: payoutId },
   });
+
   if (payout) {
-    await prisma.user.update({
+    // 🚨 FIX: partner_id points to PartnerProfile.id now, balance lives there
+    await prisma.partnerProfile.update({
       where: { id: payout.partner_id },
       data: { balance: { increment: payout.amount } },
     });
   }
+
   return await prisma.payoutRequest.update({
     where: { id: payoutId },
-    data: { status: "rejected" },
+    // 🚨 FIX: Use strict Enum "REJECTED"
+    data: { status: "REJECTED" },
   });
 };
 
 export const approveProfile = async (userId) => {
-  return await prisma.user.update({
-    where: { id: userId },
+  // 🚨 FIX: Update PerformerProfile via the unique userId relation
+  return await prisma.performerProfile.update({
+    where: { userId: userId },
     data: { moderation_status: "approved" },
   });
 };
 
 export const rejectProfile = async (userId) => {
-  return await prisma.user.update({
-    where: { id: userId },
+  // 🚨 FIX: Update PerformerProfile via the unique userId relation
+  return await prisma.performerProfile.update({
+    where: { userId: userId },
     data: { moderation_status: "rejected" },
   });
 };

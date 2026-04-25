@@ -1,6 +1,7 @@
 import express from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth, verifyOptionalAuth } from "../middleware/verify-auth.js";
+import { requireRole } from "../middleware/role-check.js"; // 🚨 FIX: Import standard role checker
 
 // Import your custom utilities
 import { createUploader } from "../utils/multer.js";
@@ -11,23 +12,6 @@ const router = express.Router();
 
 // Initialize the secure memory uploader (max 5MB)
 const upload = createUploader(5);
-
-// ==========================================
-// MIDDLEWARE: ADMIN CHECK
-// ==========================================
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user || user.role !== "administrator") {
-      return res
-        .status(403)
-        .json({ message: "Доступ запрещен. Требуются права администратора." });
-    }
-    next();
-  } catch (error) {
-    res.status(500).json({ message: "Ошибка проверки прав доступа" });
-  }
-};
 
 // ==========================================
 // HELPERS: ENUM MAPPERS
@@ -147,23 +131,43 @@ router.post(
 // ==========================================
 // 2. GET ALL TICKETS (Admin Panel)
 // ==========================================
-router.get("/all", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const tickets = await prisma.supportTicket.findMany({
-      orderBy: { created_at: "desc" },
-      include: {
-        requester: {
-          select: { id: true, name: true, email: true, phone: true },
+router.get(
+  "/all",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const tickets = await prisma.supportTicket.findMany({
+        orderBy: { created_at: "desc" },
+        include: {
+          requester: {
+            select: { id: true, name: true, email: true, phone: true },
+          },
+          // 🚨 FIX: Deep populate to get the name from the Base User attached to the AdminProfile
+          assigned_manager: {
+            include: { user: { select: { id: true, name: true } } },
+          },
         },
-        assigned_manager: { select: { id: true, name: true } },
-      },
-    });
-    res.status(200).json(tickets);
-  } catch (error) {
-    console.error("Get All Tickets Error:", error);
-    res.status(500).json({ message: "Ошибка при получении тикетов" });
-  }
-});
+      });
+
+      // Format for frontend
+      const formattedTickets = tickets.map((ticket) => ({
+        ...ticket,
+        assigned_manager: ticket.assigned_manager
+          ? {
+              id: ticket.assigned_manager.id,
+              name: ticket.assigned_manager.user.name,
+            }
+          : null,
+      }));
+
+      res.status(200).json(formattedTickets);
+    } catch (error) {
+      console.error("Get All Tickets Error:", error);
+      res.status(500).json({ message: "Ошибка при получении тикетов" });
+    }
+  },
+);
 
 // ==========================================
 // 3. GET MY TICKETS (User App)
@@ -184,72 +188,93 @@ router.get("/my-tickets", verifyAuth, async (req, res) => {
 // ==========================================
 // 4. UPDATE / RESOLVE TICKET (Admin Panel)
 // ==========================================
-router.patch("/:id", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const { status, priority, adminReply, assigned_manager_id } = req.body;
-    const ticketId = req.params.id;
+router.patch(
+  "/:id",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const { status, priority, adminReply, assigned_manager_id } = req.body;
+      const ticketId = req.params.id;
 
-    // 1. Fetch current ticket to check state
-    const currentTicket = await prisma.supportTicket.findUnique({
-      where: { id: ticketId },
-    });
+      // 1. Fetch current ticket to check state
+      const currentTicket = await prisma.supportTicket.findUnique({
+        where: { id: ticketId },
+      });
 
-    if (!currentTicket) {
-      return res.status(404).json({ message: "Тикет не найден" });
-    }
+      if (!currentTicket) {
+        return res.status(404).json({ message: "Тикет не найден" });
+      }
 
-    // 2. SLA Tracking Logic (Calculate Timestamps)
-    let first_response_at = currentTicket.first_response_at;
-    let resolved_at = currentTicket.resolved_at;
-    let closed_at = currentTicket.closed_at;
-    const safeStatus = status ? mapTicketStatus(status) : currentTicket.status;
-    const now = new Date();
+      // 🚨 FIX: If frontend sends Base User ID for assigned_manager_id, convert it to AdminProfile ID
+      let targetAdminProfileId = undefined;
+      if (assigned_manager_id) {
+        const adminProfile = await prisma.adminProfile.findUnique({
+          where: { userId: assigned_manager_id },
+        });
+        targetAdminProfileId = adminProfile
+          ? adminProfile.id
+          : assigned_manager_id; // Fallback in case frontend already sends profile ID
+      }
 
-    if (adminReply && !first_response_at) first_response_at = now;
+      // 2. SLA Tracking Logic (Calculate Timestamps)
+      let first_response_at = currentTicket.first_response_at;
+      let resolved_at = currentTicket.resolved_at;
+      let closed_at = currentTicket.closed_at;
+      const safeStatus = status
+        ? mapTicketStatus(status)
+        : currentTicket.status;
+      const now = new Date();
 
-    if (safeStatus === "RESOLVED" && currentTicket.status !== "RESOLVED") {
-      resolved_at = now;
-    }
+      if (adminReply && !first_response_at) first_response_at = now;
 
-    if (safeStatus === "CLOSED" && currentTicket.status !== "CLOSED") {
-      closed_at = now;
-      if (!resolved_at) resolved_at = now; // Auto-resolve if closed directly
-    }
+      if (safeStatus === "RESOLVED" && currentTicket.status !== "RESOLVED") {
+        resolved_at = now;
+      }
 
-    // 3. Update the DB
-    const updatedTicket = await prisma.supportTicket.update({
-      where: { id: ticketId },
-      data: {
-        status: safeStatus,
-        priority: priority || undefined,
-        assigned_manager_id: assigned_manager_id || undefined,
-        first_response_at,
-        resolved_at,
-        closed_at,
-      },
-      include: { requester: true, assigned_manager: true },
-    });
+      if (safeStatus === "CLOSED" && currentTicket.status !== "CLOSED") {
+        closed_at = now;
+        if (!resolved_at) resolved_at = now; // Auto-resolve if closed directly
+      }
 
-    // 4. Handle Admin Reply & Master Notification Dispatch
-    if (adminReply && updatedTicket.requester_id) {
-      await notifyUser({
-        userId: updatedTicket.requester_id,
-        title: `Ответ по тикету #${updatedTicket.ticket_number}`,
-        body: adminReply,
-        type: "SUPPORT_UPDATE",
+      // 3. Update the DB
+      const updatedTicket = await prisma.supportTicket.update({
+        where: { id: ticketId },
         data: {
-          ticketId: updatedTicket.id,
-          status: updatedTicket.status,
-          url: `/support/${updatedTicket.id}`, // PWA deep linking
+          status: safeStatus,
+          priority: priority || undefined,
+          assigned_manager_id: targetAdminProfileId, // Uses resolved profile ID
+          first_response_at,
+          resolved_at,
+          closed_at,
+        },
+        include: {
+          requester: true,
+          assigned_manager: { include: { user: true } },
         },
       });
-    }
 
-    res.status(200).json(updatedTicket);
-  } catch (error) {
-    console.error("Update Ticket Error:", error);
-    res.status(500).json({ message: "Ошибка при обновлении тикета" });
-  }
-});
+      // 4. Handle Admin Reply & Master Notification Dispatch
+      if (adminReply && updatedTicket.requester_id) {
+        await notifyUser({
+          userId: updatedTicket.requester_id,
+          title: `Ответ по тикету #${updatedTicket.ticket_number}`,
+          body: adminReply,
+          type: "SUPPORT_UPDATE",
+          data: {
+            ticketId: updatedTicket.id,
+            status: updatedTicket.status,
+            url: `/support/${updatedTicket.id}`,
+          },
+        });
+      }
+
+      res.status(200).json(updatedTicket);
+    } catch (error) {
+      console.error("Update Ticket Error:", error);
+      res.status(500).json({ message: "Ошибка при обновлении тикета" });
+    }
+  },
+);
 
 export default router;

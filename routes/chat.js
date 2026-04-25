@@ -5,11 +5,7 @@ import { redis } from "../libs/redis.js";
 import { createUploader } from "../utils/multer.js";
 
 // Image Upload Imports
-import {
-  minioClient,
-  MINIO_BUCKET_NAME,
-  MINIO_PUBLIC_URL,
-} from "../utils/minioClient.js";
+import { MINIO_BUCKET_NAME } from "../utils/minioClient.js";
 import { optimizeAndUpload } from "../utils/imageProcessor.js";
 const chatPhotoUploader = createUploader(10); // 10MB limit
 
@@ -40,18 +36,18 @@ router.get("/sessions", verifyAuth, async (req, res) => {
           select: {
             id: true,
             name: true,
-            profile_picture: true,
+            image: true, // 🚨 FIX: Changed from profile_picture to image
             role: true,
-            updated_at: true,
+            updatedAt: true, // 🚨 FIX: Changed to camelCase updatedAt
           },
         },
         user2: {
           select: {
             id: true,
             name: true,
-            profile_picture: true,
+            image: true, // 🚨 FIX: Changed from profile_picture to image
             role: true,
-            updated_at: true,
+            updatedAt: true, // 🚨 FIX: Changed to camelCase updatedAt
           },
         },
         messages: {
@@ -101,7 +97,7 @@ router.get("/sessions", verifyAuth, async (req, res) => {
         partnerId: partner.id,
         partnerName: partner.name,
         partnerRole: partner.role,
-        partnerImage: partner.profilePicture,
+        partnerImage: partner.image, // 🚨 FIX: Map to new image property
 
         lastMessage: lastMessage
           ? lastMessage.text || "📷 Фотография"

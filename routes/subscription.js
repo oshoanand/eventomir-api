@@ -8,8 +8,6 @@ const router = Router();
 // ==========================================
 // GET /api/subscriptions - List all plans
 // ==========================================
-// Accessible by all authenticated users (so they can see pricing),
-// but you could restrict this if it's strictly for the admin panel.
 router.get("/", verifyAuth, async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
@@ -92,18 +90,24 @@ router.post(
           .json({ message: `Тариф с уровнем ${tier} уже существует.` });
       }
 
+      // 🚨 FIX: Safely parse integers to prevent float crashes, and allow "0"
       const plan = await prisma.subscriptionPlan.create({
         data: {
           name,
           description: description || "",
           tier,
-
           features:
             typeof features === "object" && features !== null ? features : {},
           isActive: isActive ?? true,
-          priceMonthly: Number(priceMonthly),
-          priceHalfYearly: priceHalfYearly ? Number(priceHalfYearly) : null,
-          priceYearly: priceYearly ? Number(priceYearly) : null,
+          priceMonthly: parseInt(priceMonthly),
+          priceHalfYearly:
+            priceHalfYearly != null && priceHalfYearly !== ""
+              ? parseInt(priceHalfYearly)
+              : null,
+          priceYearly:
+            priceYearly != null && priceYearly !== ""
+              ? parseInt(priceYearly)
+              : null,
         },
       });
 
@@ -135,19 +139,32 @@ router.patch(
         priceYearly,
       } = req.body;
 
+      // 🚨 FIX: Strict checks to prevent destroying data on partial updates
       const plan = await prisma.subscriptionPlan.update({
         where: { id: req.params.id },
         data: {
-          name,
-          description,
-          tier,
-          // 🚨 FIX: Safely pass the JSON features object
+          name: name !== undefined ? name : undefined,
+          description: description !== undefined ? description : undefined,
+          tier: tier !== undefined ? tier : undefined,
           features: features !== undefined ? features : undefined,
-          isActive,
+          isActive: isActive !== undefined ? isActive : undefined,
           priceMonthly:
-            priceMonthly !== undefined ? Number(priceMonthly) : undefined,
-          priceHalfYearly: priceHalfYearly ? Number(priceHalfYearly) : null,
-          priceYearly: priceYearly ? Number(priceYearly) : null,
+            priceMonthly !== undefined ? parseInt(priceMonthly) : undefined,
+
+          // If explicitly undefined, do nothing. If null/empty, wipe it. Otherwise, parse it.
+          priceHalfYearly:
+            priceHalfYearly !== undefined
+              ? priceHalfYearly === null || priceHalfYearly === ""
+                ? null
+                : parseInt(priceHalfYearly)
+              : undefined,
+
+          priceYearly:
+            priceYearly !== undefined
+              ? priceYearly === null || priceYearly === ""
+                ? null
+                : parseInt(priceYearly)
+              : undefined,
         },
       });
 

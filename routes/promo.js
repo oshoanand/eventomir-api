@@ -1,25 +1,8 @@
 import express from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
-
+import { requireRole } from "../middleware/role-check.js";
 const router = express.Router();
-
-// ==========================================
-// MIDDLEWARE: ADMIN CHECK
-// ==========================================
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user || user.role !== "administrator") {
-      return res
-        .status(403)
-        .json({ message: "Доступ запрещен. Требуются права администратора." });
-    }
-    next();
-  } catch (error) {
-    res.status(500).json({ message: "Ошибка проверки прав доступа" });
-  }
-};
 
 // ==========================================
 // 1. VALIDATE PROMO CODE (Public / Checkout)
@@ -39,7 +22,7 @@ router.post("/validate", verifyAuth, async (req, res) => {
     const promo = await prisma.promoCode.findUnique({
       where: { code: code.toUpperCase() },
       include: {
-        usedByUsers: { where: { id: userId } }, // Only fetch if THIS user used it
+        usedByUsers: { where: { id: userId } },
       },
     });
 
@@ -60,7 +43,7 @@ router.post("/validate", verifyAuth, async (req, res) => {
         .json({ message: "Лимит использования промокода исчерпан." });
     }
 
-    // 🚨 NEW: Single Use Per User Constraint Check
+    // Single Use Per User Constraint Check
     if (promo.isSingleUsePerUser && promo.usedByUsers.length > 0) {
       return res
         .status(400)
@@ -120,182 +103,218 @@ router.post("/validate", verifyAuth, async (req, res) => {
 // ==========================================
 // 2. CREATE PROMO CODE (Admin)
 // ==========================================
-router.post("/", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const {
-      code,
-      type,
-      value,
-      maxDiscountAmount,
-      minOrderAmount,
-      maxUses,
-      validUntil,
-      isSingleUsePerUser,
-    } = req.body;
-
-    if (!code || !type || !value) {
-      return res.status(400).json({
-        message: "Не заполнены обязательные поля (code, type, value)",
-      });
-    }
-
-    const existingCode = await prisma.promoCode.findUnique({
-      where: { code: code.toUpperCase() },
-    });
-
-    if (existingCode) {
-      return res
-        .status(409)
-        .json({ message: "Промокод с таким названием уже существует" });
-    }
-
-    const newPromo = await prisma.promoCode.create({
-      data: {
-        code: code.toUpperCase(),
+router.post(
+  "/",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const {
+        code,
         type,
-        value: parseFloat(value),
-        maxDiscountAmount: maxDiscountAmount
-          ? parseFloat(maxDiscountAmount)
-          : null,
-        minOrderAmount: minOrderAmount ? parseFloat(minOrderAmount) : null,
-        maxUses: maxUses ? parseInt(maxUses) : null,
-        validUntil: validUntil ? new Date(validUntil) : null,
-        isSingleUsePerUser: isSingleUsePerUser || false,
-        isActive: true,
-      },
-    });
+        value,
+        maxDiscountAmount,
+        minOrderAmount,
+        maxUses,
+        validUntil,
+        isSingleUsePerUser,
+      } = req.body;
 
-    res.status(201).json(newPromo);
-  } catch (error) {
-    console.error("Create Promo Error:", error);
-    res.status(500).json({ message: "Ошибка при создании промокода" });
-  }
-});
+      if (!code || !type || value === undefined) {
+        return res.status(400).json({
+          message: "Не заполнены обязательные поля (code, type, value)",
+        });
+      }
+
+      const existingCode = await prisma.promoCode.findUnique({
+        where: { code: code.toUpperCase() },
+      });
+
+      if (existingCode) {
+        return res
+          .status(409)
+          .json({ message: "Промокод с таким названием уже существует" });
+      }
+
+      // 🚨 FIX: Safer parsing to allow "0" values without resolving to null
+      const newPromo = await prisma.promoCode.create({
+        data: {
+          code: code.toUpperCase(),
+          type,
+          value: parseFloat(value),
+          maxDiscountAmount:
+            maxDiscountAmount != null && maxDiscountAmount !== ""
+              ? parseFloat(maxDiscountAmount)
+              : null,
+          minOrderAmount:
+            minOrderAmount != null && minOrderAmount !== ""
+              ? parseFloat(minOrderAmount)
+              : null,
+          maxUses: maxUses != null && maxUses !== "" ? parseInt(maxUses) : null,
+          validUntil: validUntil ? new Date(validUntil) : null,
+          isSingleUsePerUser: isSingleUsePerUser || false,
+          isActive: true,
+        },
+      });
+
+      res.status(201).json(newPromo);
+    } catch (error) {
+      console.error("Create Promo Error:", error);
+      res.status(500).json({ message: "Ошибка при создании промокода" });
+    }
+  },
+);
 
 // ==========================================
 // 3. GET ALL PROMO CODES (Admin)
 // ==========================================
-router.get("/", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const promos = await prisma.promoCode.findMany({
-      orderBy: { createdAt: "desc" },
-    });
-    res.status(200).json(promos);
-  } catch (error) {
-    console.error("Get Promos Error:", error);
-    res.status(500).json({ message: "Ошибка при получении списка промокодов" });
-  }
-});
+router.get(
+  "/",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const promos = await prisma.promoCode.findMany({
+        orderBy: { createdAt: "desc" },
+      });
+      res.status(200).json(promos);
+    } catch (error) {
+      console.error("Get Promos Error:", error);
+      res
+        .status(500)
+        .json({ message: "Ошибка при получении списка промокодов" });
+    }
+  },
+);
 
 // ==========================================
 // 4. GET SINGLE PROMO CODE (Admin)
 // ==========================================
-router.get("/:id", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const promo = await prisma.promoCode.findUnique({
-      where: { id: req.params.id },
-    });
+router.get(
+  "/:id",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const promo = await prisma.promoCode.findUnique({
+        where: { id: req.params.id },
+      });
 
-    if (!promo) return res.status(404).json({ message: "Промокод не найден" });
+      if (!promo)
+        return res.status(404).json({ message: "Промокод не найден" });
 
-    res.status(200).json(promo);
-  } catch (error) {
-    console.error("Get Single Promo Error:", error);
-    res.status(500).json({ message: "Ошибка при получении промокода" });
-  }
-});
+      res.status(200).json(promo);
+    } catch (error) {
+      console.error("Get Single Promo Error:", error);
+      res.status(500).json({ message: "Ошибка при получении промокода" });
+    }
+  },
+);
 
 // ==========================================
 // 5. UPDATE PROMO CODE (Admin)
 // ==========================================
-router.patch("/:id", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const {
-      code,
-      type,
-      value,
-      maxDiscountAmount,
-      minOrderAmount,
-      maxUses,
-      validUntil,
-      isActive,
-      isSingleUsePerUser, // 🚨 NEW
-    } = req.body;
+router.patch(
+  "/:id",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const {
+        code,
+        type,
+        value,
+        maxDiscountAmount,
+        minOrderAmount,
+        maxUses,
+        validUntil,
+        isActive,
+        isSingleUsePerUser,
+      } = req.body;
 
-    const promo = await prisma.promoCode.findUnique({
-      where: { id: req.params.id },
-    });
+      const promo = await prisma.promoCode.findUnique({
+        where: { id: req.params.id },
+      });
 
-    if (!promo) return res.status(404).json({ message: "Промокод не найден" });
+      if (!promo)
+        return res.status(404).json({ message: "Промокод не найден" });
 
-    const updatedPromo = await prisma.promoCode.update({
-      where: { id: req.params.id },
-      data: {
-        code: code ? code.toUpperCase() : undefined,
-        type: type !== undefined ? type : undefined,
-        value: value !== undefined ? parseFloat(value) : undefined,
-        maxDiscountAmount:
-          maxDiscountAmount !== undefined
-            ? maxDiscountAmount
-              ? parseFloat(maxDiscountAmount)
-              : null
-            : undefined,
-        minOrderAmount:
-          minOrderAmount !== undefined
-            ? minOrderAmount
-              ? parseFloat(minOrderAmount)
-              : null
-            : undefined,
-        maxUses:
-          maxUses !== undefined
-            ? maxUses
-              ? parseInt(maxUses)
-              : null
-            : undefined,
-        validUntil:
-          validUntil !== undefined
-            ? validUntil
-              ? new Date(validUntil)
-              : null
-            : undefined,
-        isActive: isActive !== undefined ? isActive : undefined,
-        isSingleUsePerUser:
-          isSingleUsePerUser !== undefined ? isSingleUsePerUser : undefined, // 🚨 NEW: Update flag
-      },
-    });
+      // 🚨 FIX: Cleaned up the nested ternary parsing logic
+      const updatedPromo = await prisma.promoCode.update({
+        where: { id: req.params.id },
+        data: {
+          code: code ? code.toUpperCase() : undefined,
+          type: type !== undefined ? type : undefined,
+          value: value !== undefined ? parseFloat(value) : undefined,
+          maxDiscountAmount:
+            maxDiscountAmount !== undefined
+              ? maxDiscountAmount === null || maxDiscountAmount === ""
+                ? null
+                : parseFloat(maxDiscountAmount)
+              : undefined,
+          minOrderAmount:
+            minOrderAmount !== undefined
+              ? minOrderAmount === null || minOrderAmount === ""
+                ? null
+                : parseFloat(minOrderAmount)
+              : undefined,
+          maxUses:
+            maxUses !== undefined
+              ? maxUses === null || maxUses === ""
+                ? null
+                : parseInt(maxUses)
+              : undefined,
+          validUntil:
+            validUntil !== undefined
+              ? validUntil
+                ? new Date(validUntil)
+                : null
+              : undefined,
+          isActive: isActive !== undefined ? isActive : undefined,
+          isSingleUsePerUser:
+            isSingleUsePerUser !== undefined ? isSingleUsePerUser : undefined,
+        },
+      });
 
-    res.status(200).json(updatedPromo);
-  } catch (error) {
-    console.error("Update Promo Error:", error);
-    if (error.code === "P2002") {
-      return res
-        .status(409)
-        .json({ message: "Промокод с таким названием уже существует" });
+      res.status(200).json(updatedPromo);
+    } catch (error) {
+      console.error("Update Promo Error:", error);
+      if (error.code === "P2002") {
+        return res
+          .status(409)
+          .json({ message: "Промокод с таким названием уже существует" });
+      }
+      res.status(500).json({ message: "Ошибка при обновлении промокода" });
     }
-    res.status(500).json({ message: "Ошибка при обновлении промокода" });
-  }
-});
+  },
+);
 
 // ==========================================
 // 6. DELETE PROMO CODE (Admin)
 // ==========================================
-router.delete("/:id", verifyAuth, verifyAdmin, async (req, res) => {
-  try {
-    const promo = await prisma.promoCode.findUnique({
-      where: { id: req.params.id },
-    });
+router.delete(
+  "/:id",
+  verifyAuth,
+  requireRole(["administrator"]),
+  async (req, res) => {
+    try {
+      const promo = await prisma.promoCode.findUnique({
+        where: { id: req.params.id },
+      });
 
-    if (!promo) return res.status(404).json({ message: "Промокод не найден" });
+      if (!promo)
+        return res.status(404).json({ message: "Промокод не найден" });
 
-    await prisma.promoCode.delete({
-      where: { id: req.params.id },
-    });
+      await prisma.promoCode.delete({
+        where: { id: req.params.id },
+      });
 
-    res.status(200).json({ message: "Промокод успешно удален" });
-  } catch (error) {
-    console.error("Delete Promo Error:", error);
-    res.status(500).json({ message: "Ошибка при удалении промокода" });
-  }
-});
+      res.status(200).json({ message: "Промокод успешно удален" });
+    } catch (error) {
+      console.error("Delete Promo Error:", error);
+      res.status(500).json({ message: "Ошибка при удалении промокода" });
+    }
+  },
+);
 
 export default router;

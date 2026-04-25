@@ -7,6 +7,9 @@ import "dotenv/config";
 
 const router = express.Router();
 
+// ==========================================
+// 1. SAVE TOKEN & SUBSCRIBE TO TOPICS
+// ==========================================
 router.post("/save-fcm", verifyAuth, async (req, res) => {
   try {
     const { token } = req.body;
@@ -21,7 +24,7 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Save Token in the User table directly
+    // 2. Save Token in the base User table
     await prisma.user.update({
       where: { id: user.id },
       data: { fcmToken: token },
@@ -30,11 +33,11 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
     // 3. Define and Execute Subscriptions
     const topicsToSubscribe = [];
 
-    // Personal Topic (user_9898989898)
+    // Personal Topic (e.g., user_9898989898)
     const personalTopic = getUserTopic(user.phone);
     if (personalTopic) topicsToSubscribe.push(personalTopic);
 
-    // Group Topics
+    // Group Topics based on Base User Role
     if (user.role === "customer") {
       topicsToSubscribe.push(
         process.env.CUSTOMER_FCM_TOPIC || "eventomir_customer_topic",
@@ -47,6 +50,7 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
       topicsToSubscribe.push("eventomir_admin_topic");
     }
 
+    // Execute Firebase Subscriptions safely
     const subscriptionPromises = topicsToSubscribe.map((topic) =>
       admin
         .messaging()
@@ -57,23 +61,23 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
 
     await Promise.allSettled(subscriptionPromises);
 
-    // 4. TRIGGER WELCOME PUSH ON FIRST LOGIN
-    // if (!user.welcomePushSent) {
-    //   await notifyUser({
-    //     userId: user.id,
-    //     title: "Добро пожаловать в Eventomir! 🎉",
-    //     body: "Ваш профиль отправлен на модерацию. Мы сообщим вам, когда он будет одобрен.",
-    //     type: "SYSTEM",
-    //     data: { url: "/performer-profile" },
-    //     saveToDb: true,
-    //   });
+    // 4. TRIGGER WELCOME PUSH ON FIRST LOGIN (If not already sent)
+    if (!user.welcomePushSent && user.role === "performer") {
+      await notifyUser({
+        userId: user.id,
+        title: "Добро пожаловать в Eventomir! 🎉",
+        body: "Ваш профиль отправлен на модерацию. Мы сообщим вам, когда он будет одобрен.",
+        type: "SYSTEM",
+        data: { url: "/performer-profile" },
+        saveToDb: true,
+      });
 
-    //   // Mark the welcome push as sent so they never get it again
-    //   await prisma.user.update({
-    //     where: { id: user.id },
-    //     data: { welcomePushSent: true },
-    //   });
-    // }
+      // Mark the welcome push as sent so they never get it again
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { welcomePushSent: true },
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -87,10 +91,14 @@ router.post("/save-fcm", verifyAuth, async (req, res) => {
   }
 });
 
-// Manual Subscribe Fallback (Optional)
+// ==========================================
+// 2. MANUAL SUBSCRIBE FALLBACK
+// ==========================================
 router.post("/subscribe", verifyAuth, async (req, res) => {
   try {
     const { token } = req.body;
+
+    // Fetch phone from base user
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { phone: true },

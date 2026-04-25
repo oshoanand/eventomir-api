@@ -101,12 +101,12 @@ router.get(
         return res.status(403).json({ message: "Доступ запрещен" });
       }
 
-      // Fetch Partner mapping to exact schema relations and fields
-      const partner = await prisma.partner.findUnique({
+      // 🚨 FIX: Query partnerProfile instead of partner
+      const partner = await prisma.partnerProfile.findUnique({
         where: { userId },
         include: {
           referralEvents: {
-            orderBy: { created_at: "desc" }, // Matches schema: created_at
+            orderBy: { created_at: "desc" },
             take: 50,
           },
         },
@@ -196,9 +196,10 @@ router.patch(
         return res.status(403).json({ message: "Доступ запрещен" });
       }
 
-      await prisma.partner.update({
+      // 🚨 FIX: Update partnerProfile instead of partner
+      await prisma.partnerProfile.update({
         where: { userId },
-        data: { paymentDetails }, // Matches schema: paymentDetails (camelCase)
+        data: { paymentDetails },
       });
 
       res.json({ message: "Реквизиты обновлены успешно" });
@@ -225,7 +226,8 @@ router.post(
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const partner = await tx.partner.findUnique({
+        // 🚨 FIX: Find partnerProfile instead of partner
+        const partner = await tx.partnerProfile.findUnique({
           where: { userId },
           include: { user: true },
         });
@@ -236,7 +238,7 @@ router.post(
         if (!partner.paymentDetails)
           throw new Error("Укажите платежные реквизиты перед запросом выплаты");
 
-        // Create Payout Request matching snake_case schema fields
+        // Create Payout Request
         const payout = await tx.payoutRequest.create({
           data: {
             partner_id: partner.id,
@@ -247,7 +249,8 @@ router.post(
         });
 
         // Reset Partner Balance
-        await tx.partner.update({
+        // 🚨 FIX: Update partnerProfile instead of partner
+        await tx.partnerProfile.update({
           where: { id: partner.id },
           data: { balance: 0 },
         });

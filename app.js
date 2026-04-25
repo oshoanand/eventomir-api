@@ -44,6 +44,8 @@ import fcmRoutes from "./routes/fcm.js";
 import invitationRoutes from "./routes/invitation.js";
 import promoRoutes from "./routes/promo.js";
 import supportRoutes from "./routes/support.js";
+import feedRoutes from "./routes/feed.js";
+import financeRoutes from "./routes/finance.js";
 
 dotenv.config();
 
@@ -147,6 +149,8 @@ async function initializeExpressServer() {
   app.use("/api/promo-codes", promoRoutes);
   app.use("/api/analytics", analyticsRoutes);
   app.use("/api/support", supportRoutes);
+  app.use("/api/feeds", feedRoutes);
+  app.use("/api/finance", financeRoutes);
 
   // --- Server Start ---
   const PORT = process.env.PORT || 8800;

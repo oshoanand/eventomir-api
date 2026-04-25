@@ -9,28 +9,34 @@ import { getIO, sendSystemNotification } from "../libs/socket.js";
 export const getUserTopic = (phone) => {
   if (!phone) return null;
 
+  // Strip all non-numeric characters
   const digits = phone.replace(/\D/g, "");
+
+  // If it's a standard Russian mobile (11 digits starting with 7 or 8)
   if (
     digits.length === 11 &&
     (digits.startsWith("7") || digits.startsWith("8"))
   ) {
     return `user_${digits.slice(1)}`;
   }
-  return `user_${digits}`;
+
+  // If it's anything else, just use the raw digits as the unique suffix
+  return digits.length > 0 ? `user_${digits}` : null;
 };
 
 /**
  * Master Dispatcher for all User Notifications
+ * Dispatches to Database, Socket.io (real-time), and Firebase Cloud Messaging (Push)
  */
 export const notifyUser = async ({
   userId,
   title,
   body,
-  type,
-  data,
+  type, // Should match NotificationType Enum
+  data = {},
   saveToDb = true,
 }) => {
-  // Define target trackers for the catch block
+  // Define trackers for the logging logic
   let target = userId;
   let currentTargetType = "token";
 
@@ -43,15 +49,18 @@ export const notifyUser = async ({
           title,
           message: body,
           type,
-          data: data || {},
+          // Ensure data is stored as a valid JSON object
+          data: data && typeof data === "object" ? data : {},
         },
       });
     }
 
-    // 2. Emit Real-Time Socket Event (Instant delivery for active users)
+    // 2. Emit Real-Time Socket Event (Instant delivery for active web users)
     try {
       const io = getIO();
-      sendSystemNotification(io, userId, type, body, { title, ...data });
+      if (io) {
+        sendSystemNotification(io, userId, type, body, { title, ...data });
+      }
     } catch (socketError) {
       console.warn("⚠️ Socket.io notification skipped:", socketError.message);
     }
@@ -66,64 +75,39 @@ export const notifyUser = async ({
 
     // 4. Determine Delivery Method (Topic vs Token)
     const topicName = getUserTopic(user.phone);
+    let fcmResponse = null;
 
     if (topicName) {
-      // 🚀 SCENARIO A: Topic-Based Delivery
+      // 🚀 SCENARIO A: Topic-Based Delivery (Highly Reliable)
       target = topicName;
       currentTargetType = "topic";
 
-      const response = await sendPushNotification(
+      fcmResponse = await sendPushNotification(
         "topic",
         title,
         body,
         topicName,
         { url: data?.url || "/" },
       );
-
-      await prisma.notificationLog.create({
-        data: {
-          title,
-          body,
-          targetType: "topic",
-          target: target,
-          status: "SUCCESS",
-          messageId: response,
-        },
-      });
-
-      console.log(`✅ FCM Sent via Topic: ${topicName}`);
-      return true;
     } else if (user.fcmToken) {
       // 🔄 SCENARIO B: Fallback to Token-Based Delivery
       target = user.fcmToken;
       currentTargetType = "token";
 
-      const tokens = [user.fcmToken];
-
-      const fcmResponse = await sendPushNotification(
+      fcmResponse = await sendPushNotification(
         "token",
         title,
         body,
-        tokens,
+        [user.fcmToken],
         { url: data?.url || "/" },
       );
 
-      await prisma.notificationLog.create({
-        data: {
-          title,
-          body,
-          targetType: "token",
-          target: target,
-          status: "SUCCESS",
-          messageId: fcmResponse,
-        },
-      });
-
-      // Cleanup Dead Token
+      // 5. Cleanup Dead Token if FCM indicates it's no longer valid
       if (fcmResponse && fcmResponse.responses) {
         const resp = fcmResponse.responses[0];
         if (
           !resp.success &&
+          resp.error &&
           (resp.error.code === "messaging/invalid-registration-token" ||
             resp.error.code === "messaging/registration-token-not-registered")
         ) {
@@ -131,22 +115,41 @@ export const notifyUser = async ({
             where: { id: userId },
             data: { fcmToken: null },
           });
-          console.log(`🗑️ Cleaned up dead FCM token for user ${userId}.`);
+          console.log(`🗑️ Cleaned up expired FCM token for user ${userId}.`);
         }
       }
-      return true;
     }
+
+    // 6. Log successful delivery to Persistent Logs
+    if (fcmResponse) {
+      await prisma.notificationLog.create({
+        data: {
+          title,
+          body,
+          targetType: currentTargetType === "topic" ? "topic" : "token",
+          target: target,
+          status: "SUCCESS",
+          // Store the message ID from FCM
+          messageId:
+            typeof fcmResponse === "string"
+              ? fcmResponse
+              : fcmResponse.messageId || "batch_processed",
+        },
+      });
+    }
+
+    return true;
   } catch (error) {
     console.error("❌ Notification Dispatcher Error:", error);
 
-    // Log Failure to PostgreSQL
+    // Log Failure to Database for Admin debugging
     try {
       await prisma.notificationLog.create({
         data: {
           title,
           body,
-          targetType: currentTargetType,
-          target: target,
+          targetType: currentTargetType === "topic" ? "topic" : "token",
+          target: String(target),
           status: "FAILED",
           errorDetails: error.message,
         },
@@ -155,7 +158,7 @@ export const notifyUser = async ({
       console.error("Failed to write notification error log to DB:", logError);
     }
 
-    // Fail gracefully so the calling route (like /register-performer) can finish
+    // Fail gracefully so the parent business logic (like payment or registration) can complete
     return false;
   }
 };

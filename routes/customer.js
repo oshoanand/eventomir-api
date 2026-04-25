@@ -2,10 +2,12 @@ import express from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { createUploader } from "../utils/multer.js";
+import { optimizeAndUpload } from "../utils/imageProcessor.js"; // 🚨 FIX: Added image processor
 
 const router = express.Router();
 
-const profileUpload = createUploader("profiles");
+// Initialize memory uploader with 5MB limit
+const profileUpload = createUploader(5);
 
 // ==========================================
 // GET CUSTOMER PROFILE
@@ -14,9 +16,11 @@ router.get("/profile", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // 🚨 FIX: Include the customerProfile to get the city
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
+        customerProfile: true,
         _count: {
           select: { notifications: { where: { isRead: false } } },
         },
@@ -31,8 +35,8 @@ router.get("/profile", verifyAuth, async (req, res) => {
       name: user.name || "",
       email: user.email,
       phone: user.phone || "",
-      city: user.city || "",
-      profilePicture: user.profile_picture || user.profilePicture || "",
+      city: user.customerProfile?.city || "", // 🚨 FIX: Extract from profile
+      profilePicture: user.image || "", // 🚨 FIX: Extract from new image field
       role: user.role,
       walletBalance: user.walletBalance || 0,
       unreadNotifications: user._count?.notifications || 0,
@@ -57,36 +61,42 @@ router.put(
       const userId = req.user.id;
       const { name, phone, city } = req.body;
 
-      // Prepare data object for Prisma (Prisma ignores undefined values safely)
-      const updateData = {
-        name,
-        phone,
-        city,
-      };
-
-      // If an image was uploaded, process it
+      // 1. Process Image Upload via MinIO if a file is provided
+      let imageUrl = undefined;
       if (req.file) {
-        // Construct the public URL path.
-        // Assuming you serve the 'uploads' folder statically from your root.
-        const profileImageUrl = `${process.env.API_BASE_URL}/uploads/profiles/${req.file.filename}`;
-        updateData.profile_picture = profileImageUrl;
+        imageUrl = await optimizeAndUpload(
+          req.file,
+          "profiles",
+          userId,
+          800, // standard profile picture width
+        );
       }
 
+      // 2. 🚨 FIX: Use Nested Writes to update User and CustomerProfile simultaneously
       const updatedUser = await prisma.user.update({
         where: { id: userId },
-        data: updateData,
+        data: {
+          name: name || undefined,
+          phone: phone || undefined,
+          ...(imageUrl && { image: imageUrl }), // Only update image if new one was uploaded
+          customerProfile: {
+            upsert: {
+              create: { city: city || null },
+              update: { city: city || null },
+            },
+          },
+        },
+        include: { customerProfile: true },
       });
 
-      // Return the FULL updated profile so the frontend
-      // TanStack Query cache can instantly update the UI without a page reload.
+      // 3. Return the FULL updated profile so the frontend cache can instantly update
       res.status(200).json({
         id: updatedUser.id,
         name: updatedUser.name || "",
         email: updatedUser.email,
         phone: updatedUser.phone || "",
-        city: updatedUser.city || "",
-        profilePicture:
-          updatedUser.profile_picture || updatedUser.profilePicture || "",
+        city: updatedUser.customerProfile?.city || "",
+        profilePicture: updatedUser.image || "",
         role: updatedUser.role,
         walletBalance: updatedUser.walletBalance || 0,
       });
@@ -104,27 +114,37 @@ router.get("/orders", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Fetch bookings where this user is the customer
+    // 1. 🚨 FIX: Get the underlying CustomerProfile ID first
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId: userId },
+    });
+
+    if (!customerProfile) {
+      return res.status(200).json([]); // No profile = no bookings
+    }
+
+    // 2. 🚨 FIX: Query Bookings using CustomerProfile ID and deep populate Performer
     const bookings = await prisma.booking.findMany({
-      where: { customerId: userId },
+      where: { customerId: customerProfile.id },
       include: {
         performer: {
-          select: { name: true }, // Include performer details
+          include: {
+            user: { select: { id: true, name: true } }, // Deep fetch Base User name
+          },
         },
       },
       orderBy: { date: "desc" },
     });
 
-    // Map to frontend OrderHistoryItem interface
+    // 3. Map to frontend OrderHistoryItem interface
     const history = bookings.map((b) => ({
       id: b.id,
-      // Handle both camelCase and snake_case depending on your Prisma configuration
-      performerId: b.performerId || b.performer_id,
-      performerName: b.performer?.name || "Неизвестно", // Added optional chaining for safety
-      service: b.service || "Неизвестная услуга", // Fixed typo "Uknown"
-      date: b.date, // Prisma returns Date object
-      status: b.status, // pending, confirmed, completed, etc.
-      price: b.price || 0,
+      performerId: b.performer.user.id, // Point back to Base User ID for frontend routing
+      performerName: b.performer.user.name || "Неизвестный исполнитель",
+      service: b.details || "Бронирование", // Default fallback if no details provided
+      date: b.date,
+      status: b.status,
+      price: 0, // Replace with actual price logic if added to Booking model
     }));
 
     res.status(200).json(history);

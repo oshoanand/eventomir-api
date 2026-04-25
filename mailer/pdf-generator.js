@@ -160,129 +160,6 @@ export const generateTicketPDF = async (order, event, user) => {
 /**
  * Generates a PDF Receipt/Invoice for Subscription Purchases.
  */
-// export const generateSubscriptionReceiptPDF = (
-//   payment,
-//   user,
-//   plan,
-//   amount,
-//   interval,
-// ) => {
-//   return new Promise((resolve, reject) => {
-//     try {
-//       const doc = new PDFDocument({ size: "A4", margin: 50 });
-//       const buffers = [];
-
-//       doc.on("data", buffers.push.bind(buffers));
-
-//       doc.on("end", () => {
-//         const pdfData = Buffer.concat(buffers);
-//         resolve(pdfData);
-//       });
-
-//       // Map interval to readable English text
-//       const intervalMap = {
-//         month: "1 Month",
-//         half_year: "6 Months",
-//         year: "1 Year",
-//       };
-//       const billingPeriod = intervalMap[interval] || interval;
-
-//       const paymentDate = new Date().toLocaleDateString();
-
-//       // --- RECEIPT DESIGN ---
-
-//       // Header
-//       doc
-//         .fontSize(28)
-//         .fillColor("#2563EB") // A professional blue for receipts
-//         .text("Eventomir", { align: "left" });
-
-//       doc
-//         .fontSize(12)
-//         .fillColor("#6B7280")
-//         .text("Payment Receipt / Invoice", { align: "left" });
-//       doc.moveDown(2);
-
-//       // Customer Details & Invoice Details (Two Columns)
-//       const topY = doc.y;
-
-//       // Left Column: Billed To
-//       doc.fontSize(10).fillColor("#9CA3AF").text("BILLED TO:", 50, topY);
-//       doc
-//         .fontSize(12)
-//         .fillColor("#111827")
-//         .text(user.name || "Customer", 50, topY + 15);
-//       doc
-//         .fontSize(10)
-//         .fillColor("#4B5563")
-//         .text(user.email, 50, topY + 30);
-
-//       // Right Column: Receipt Info
-//       doc.fontSize(10).fillColor("#9CA3AF").text("RECEIPT DETAILS:", 350, topY);
-//       doc
-//         .fontSize(10)
-//         .fillColor("#4B5563")
-//         .text(
-//           `Receipt No: ${payment.id.split("-")[0].toUpperCase()}`,
-//           350,
-//           topY + 15,
-//         );
-//       doc.text(`Date: ${paymentDate}`, 350, topY + 30);
-//       doc.text(`Status: PAID`, 350, topY + 45);
-
-//       doc.moveDown(4);
-
-//       // Table Header
-//       const tableTop = doc.y;
-//       doc.rect(50, tableTop, 495, 25).fill("#F3F4F6"); // Light gray header background
-//       doc.fontSize(10).fillColor("#374151").font("Helvetica-Bold");
-//       doc.text("DESCRIPTION", 60, tableTop + 8);
-//       doc.text("BILLING PERIOD", 250, tableTop + 8);
-//       doc.text("AMOUNT", 450, tableTop + 8);
-
-//       doc.font("Helvetica"); // reset to normal
-
-//       // Table Row
-//       const rowTop = tableTop + 35;
-//       doc.fontSize(12).fillColor("#111827");
-//       doc.text(`Subscription: ${plan?.name || "Premium"} Plan`, 60, rowTop);
-//       doc.text(billingPeriod, 250, rowTop);
-//       doc.text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop);
-
-//       // Divider Line
-//       doc
-//         .moveTo(50, rowTop + 25)
-//         .lineTo(545, rowTop + 25)
-//         .stroke("#E5E7EB");
-
-//       // Total Section
-//       doc.fontSize(14).font("Helvetica-Bold");
-//       doc.text("TOTAL PAID:", 300, rowTop + 45);
-//       doc
-//         .fillColor("#10B981")
-//         .text(`${amount.toLocaleString("ru-RU")} RUB`, 450, rowTop + 45);
-//       doc.font("Helvetica"); // reset to normal
-
-//       doc.moveDown(6);
-
-//       // Footer
-//       doc
-//         .fontSize(10)
-//         .fillColor("#9CA3AF")
-//         .text(
-//           "Thank you for your subscription! If you have any questions, please contact support.",
-//           50,
-//           doc.y,
-//           { align: "center", width: 495 },
-//         );
-
-//       // Finalize the PDF
-//       doc.end();
-//     } catch (error) {
-//       reject(error);
-//     }
-//   });
-// };
 
 export const generateSubscriptionReceiptPDF = async (
   payment,
@@ -291,9 +168,6 @@ export const generateSubscriptionReceiptPDF = async (
   amount,
   interval,
 ) => {
-  console.log(payment);
-  console.log(user);
-  console.log(plan);
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: "A4", margin: 50 });
@@ -413,7 +287,409 @@ export const generateSubscriptionReceiptPDF = async (
   });
 };
 
-// export const generateB2BInvoicePDF = (order, user, plan) => {
+// ----------------------------------------------------------------
+// HELPER: Convert number to Russian words for the invoice footer
+// ----------------------------------------------------------------
+const numberToWordsRu = (number) => {
+  const units = [
+    "",
+    "один",
+    "два",
+    "три",
+    "четыре",
+    "пять",
+    "шесть",
+    "семь",
+    "восемь",
+    "девять",
+  ];
+  const unitsFemale = [
+    "",
+    "одна",
+    "две",
+    "три",
+    "четыре",
+    "пять",
+    "шесть",
+    "семь",
+    "восемь",
+    "девять",
+  ];
+  const teens = [
+    "десять",
+    "одиннадцать",
+    "двенадцать",
+    "тринадцать",
+    "четырнадцать",
+    "пятнадцать",
+    "шестнадцать",
+    "семнадцать",
+    "восемнадцать",
+    "девятнадцать",
+  ];
+  const tens = [
+    "",
+    "",
+    "двадцать",
+    "тридцать",
+    "сорок",
+    "пятьдесят",
+    "шестьдесят",
+    "семьдесят",
+    "восемьдесят",
+    "девяносто",
+  ];
+  const hundreds = [
+    "",
+    "сто",
+    "двести",
+    "триста",
+    "четыреста",
+    "пятьсот",
+    "шестьсот",
+    "семьсот",
+    "восемьсот",
+    "девятьсот",
+  ];
+
+  const getThousandths = (n) => {
+    let result = "";
+    const h = Math.floor(n / 100);
+    const t = Math.floor((n % 100) / 10);
+    const u = n % 10;
+
+    if (h > 0) result += hundreds[h] + " ";
+    if (t === 1) result += teens[u] + " ";
+    else {
+      if (t > 1) result += tens[t] + " ";
+      if (u > 0) result += unitsFemale[u] + " ";
+    }
+    return result.trim();
+  };
+
+  let numStr = Math.floor(number);
+  const kopecks = Math.round((number - numStr) * 100)
+    .toString()
+    .padStart(2, "0");
+
+  if (numStr === 0) return `Ноль рублей ${kopecks} копеек`;
+
+  let words = "";
+  const thousands = Math.floor(numStr / 1000);
+  const remainder = numStr % 1000;
+
+  if (thousands > 0) {
+    words += getThousandths(thousands) + " ";
+    const lastDigit = thousands % 10;
+    const lastTwo = thousands % 100;
+    if (lastTwo >= 11 && lastTwo <= 14) words += "тысяч ";
+    else if (lastDigit === 1) words += "тысяча ";
+    else if (lastDigit >= 2 && lastDigit <= 4) words += "тысячи ";
+    else words += "тысяч ";
+  }
+
+  if (remainder > 0) {
+    const h = Math.floor(remainder / 100);
+    const t = Math.floor((remainder % 100) / 10);
+    const u = remainder % 10;
+
+    if (h > 0) words += hundreds[h] + " ";
+    if (t === 1) words += teens[u] + " ";
+    else {
+      if (t > 1) words += tens[t] + " ";
+      if (u > 0) words += units[u] + " ";
+    }
+  }
+
+  words = words.trim();
+  words = words.charAt(0).toUpperCase() + words.slice(1);
+
+  const lastDigit = numStr % 10;
+  const lastTwo = numStr % 100;
+  let currency = "рублей";
+  if (lastTwo < 11 || lastTwo > 14) {
+    if (lastDigit === 1) currency = "рубль";
+    else if (lastDigit >= 2 && lastDigit <= 4) currency = "рубля";
+  }
+
+  return `${words} ${currency} ${kopecks} копеек`;
+};
+
+// ----------------------------------------------------------------
+// MAIN FUNCTION
+// ----------------------------------------------------------------
+export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ margin: 40, size: "A4" });
+      const buffers = [];
+
+      doc.on("data", buffers.push.bind(buffers));
+      doc.on("end", () => resolve(Buffer.concat(buffers)));
+
+      // 1. FONT CONFIGURATION
+      const fontsDir = path.join(process.cwd(), "public", "fonts");
+      const regularFontPath = path.join(fontsDir, "Roboto-Regular.ttf");
+      const boldFontPath = path.join(fontsDir, "Roboto-Bold.ttf");
+
+      if (!fs.existsSync(regularFontPath) || !fs.existsSync(boldFontPath)) {
+        throw new Error("Не удалось загрузить шрифты Roboto из public/fonts/");
+      }
+
+      doc.registerFont("Roboto", regularFontPath);
+      doc.registerFont("Roboto-Bold", boldFontPath);
+      doc.font("Roboto");
+
+      // 2. BANK DETAILS GRID (Mimicking 1C Layout)
+      doc.lineWidth(1);
+      const startX = 40;
+      let startY = 40;
+
+      // Draw outer box
+      doc.rect(startX, startY, 515, 75).stroke();
+      // Draw internal grid lines
+      doc
+        .moveTo(300, startY)
+        .lineTo(300, startY + 75)
+        .stroke();
+      doc
+        .moveTo(startX, startY + 35)
+        .lineTo(300, startY + 35)
+        .stroke();
+      doc
+        .moveTo(300, startY + 25)
+        .lineTo(555, startY + 25)
+        .stroke();
+      doc
+        .moveTo(170, startY + 35)
+        .lineTo(170, startY + 50)
+        .stroke();
+      doc
+        .moveTo(startX, startY + 50)
+        .lineTo(300, startY + 50)
+        .stroke();
+
+      doc.fontSize(8);
+      // Top Left Cell
+      doc.text(
+        "ПОВОЛЖСКИЙ БАНК ПАО СБЕРБАНК г. Самара",
+        startX + 5,
+        startY + 5,
+      );
+      doc.text("Банк получателя", startX + 5, startY + 25);
+
+      // Top Right Cells
+      doc.text("БИК", 305, startY + 5);
+      doc.text("043601607", 340, startY + 5);
+      doc.text("Сч. №", 305, startY + 15);
+      doc.text("30101810200000000607", 340, startY + 15);
+
+      // Middle Left Cells
+      doc.text("ИНН 631805965520", startX + 5, startY + 40);
+      doc.text("КПП", 175, startY + 40);
+
+      // Bottom Right Cell
+      doc.text("Сч. №", 305, startY + 30);
+      doc.text("40802810054400037540", 340, startY + 30);
+
+      // Bottom Left Cell
+      doc.text("ИП Соломатникова Елена Сергеевна", startX + 5, startY + 55);
+      doc.text("Получатель", startX + 5, startY + 65);
+
+      startY += 100;
+
+      // 3. INVOICE TITLE
+      const invoiceNumber =
+        paymentRecord.providerTxId || `B2B-${paymentRecord.id.substring(0, 6)}`;
+      const dateStr = new Date().toLocaleDateString("ru-RU", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+
+      doc.font("Roboto-Bold").fontSize(14);
+      doc.text(
+        `Счет на оплату № ${invoiceNumber} от ${dateStr} г.`,
+        startX,
+        startY,
+      );
+      doc
+        .moveTo(startX, startY + 20)
+        .lineTo(555, startY + 20)
+        .lineWidth(2)
+        .stroke();
+
+      startY += 35;
+
+      // 4. PARTIES INFO
+      doc.fontSize(10);
+      const supplierText =
+        "ИП Соломатникова Е. С., ИНН 631805965520, 443081, Самарская обл, Самара г, Советской Армии ул, дом № 181, корпус 6Б, квартира 46";
+      const buyerText = `${user.company_name || "ООО Покупатель"}, ИНН ${user.inn || "Не указан"}, КПП ${user.kpp || "Не указан"}, ${user.city || "Адрес не указан"}`;
+
+      doc.font("Roboto-Bold").text("Поставщик", startX, startY);
+      doc.text("(Исполнитель):", startX, startY + 12);
+      doc
+        .font("Roboto")
+        .text(supplierText, startX + 85, startY, { width: 430 });
+
+      startY += 35;
+      doc.font("Roboto-Bold").text("Покупатель", startX, startY);
+      doc.text("(Заказчик):", startX, startY + 12);
+      doc.font("Roboto").text(buyerText, startX + 85, startY, { width: 430 });
+
+      startY += 35;
+      doc.font("Roboto-Bold").text("Основание:", startX, startY);
+      doc.font("Roboto").text("Основной договор", startX + 85, startY);
+
+      startY += 30;
+
+      // 5. ITEMS TABLE
+      const intervalNames = {
+        month: "1 мес.",
+        half_year: "6 мес.",
+        year: "1 год",
+      };
+      const periodLabel = intervalNames[interval] || "период";
+      const itemName = `Корпоративная подписка "${plan?.name || "Платформа"}" (${periodLabel})`;
+      const amountStr = paymentRecord.amount.toFixed(2);
+
+      // Table Header
+      doc.lineWidth(1).rect(startX, startY, 515, 20).stroke();
+      doc
+        .moveTo(70, startY)
+        .lineTo(70, startY + 20)
+        .stroke();
+      doc
+        .moveTo(350, startY)
+        .lineTo(350, startY + 20)
+        .stroke();
+      doc
+        .moveTo(400, startY)
+        .lineTo(400, startY + 20)
+        .stroke();
+      doc
+        .moveTo(440, startY)
+        .lineTo(440, startY + 20)
+        .stroke();
+      doc
+        .moveTo(490, startY)
+        .lineTo(490, startY + 20)
+        .stroke();
+
+      doc.font("Roboto-Bold").fontSize(9);
+      doc.text("№", startX + 5, startY + 5);
+      doc.text("Товары (работы, услуги)", 75, startY + 5);
+      doc.text("Кол-во", 355, startY + 5);
+      doc.text("Ед.", 405, startY + 5);
+      doc.text("Цена", 445, startY + 5);
+      doc.text("Сумма", 495, startY + 5);
+
+      startY += 20;
+
+      // Table Row
+      doc.rect(startX, startY, 515, 20).stroke();
+      doc
+        .moveTo(70, startY)
+        .lineTo(70, startY + 20)
+        .stroke();
+      doc
+        .moveTo(350, startY)
+        .lineTo(350, startY + 20)
+        .stroke();
+      doc
+        .moveTo(400, startY)
+        .lineTo(400, startY + 20)
+        .stroke();
+      doc
+        .moveTo(440, startY)
+        .lineTo(440, startY + 20)
+        .stroke();
+      doc
+        .moveTo(490, startY)
+        .lineTo(490, startY + 20)
+        .stroke();
+
+      doc.font("Roboto").fontSize(9);
+      doc.text("1", startX + 5, startY + 5);
+      doc.text(itemName, 75, startY + 5, {
+        width: 270,
+        height: 15,
+        ellipsis: true,
+      });
+      doc.text("1", 355, startY + 5);
+      doc.text("Усл", 405, startY + 5);
+      doc.text(amountStr, 445, startY + 5);
+      doc.text(amountStr, 495, startY + 5);
+
+      startY += 30;
+
+      // 6. TOTALS
+      doc.font("Roboto-Bold").fontSize(10);
+      doc.text("Итого:", 445, startY);
+      doc.text(amountStr, 495, startY);
+      startY += 15;
+      doc.text("Без налога (НДС)", 445, startY); // Using simplified tax system as requested
+      startY += 15;
+      doc.text("Всего к оплате:", 405, startY);
+      doc.text(amountStr, 495, startY);
+
+      startY += 25;
+
+      // 7. FOOTER SUMMARY
+      doc.font("Roboto").fontSize(10);
+      doc.text(
+        `Всего наименований 1, на сумму ${amountStr} руб.`,
+        startX,
+        startY,
+      );
+      startY += 15;
+      doc.font("Roboto-Bold");
+      doc.text(numberToWordsRu(paymentRecord.amount), startX, startY);
+
+      startY += 15;
+      doc.moveTo(startX, startY).lineTo(555, startY).lineWidth(1).stroke();
+      startY += 15;
+
+      // 8. TERMS & CONDITIONS
+      doc.font("Roboto").fontSize(9);
+      doc.text(
+        "Оплата данного счета означает согласие с условиями поставки товара.",
+        startX,
+        startY,
+      );
+      startY += 15;
+      doc.text(
+        "Уведомление об оплате обязательно, в противном случае не гарантируется наличие товара на складе.",
+        startX,
+        startY,
+      );
+      startY += 15;
+      doc.text(
+        "Товар отпускается по факту прихода денег на р/с Поставщика, самовывозом, при наличии доверенности и паспорта.",
+        startX,
+        startY,
+      );
+
+      startY += 40;
+
+      // 9. SIGNATURE
+      doc.font("Roboto-Bold").fontSize(10);
+      doc.text("Предприниматель", startX, startY);
+      doc
+        .moveTo(startX + 100, startY + 10)
+        .lineTo(startX + 250, startY + 10)
+        .stroke(); // Signature line
+      doc.text("Соломатникова Е. С.", startX + 260, startY);
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+// export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
 //   return new Promise((resolve, reject) => {
 //     try {
 //       const doc = new PDFDocument({ margin: 50 });
@@ -422,10 +698,37 @@ export const generateSubscriptionReceiptPDF = async (
 //       doc.on("data", buffers.push.bind(buffers));
 //       doc.on("end", () => resolve(Buffer.concat(buffers)));
 
-//       // Для поддержки кириллицы необходимо загрузить свой шрифт
-//       // doc.font("path/to/Roboto-Regular.ttf");
+//       // ----------------------------------------------------------------
+//       // 1. ROBUST FONT LOADING FOR CYRILLIC SUPPORT
+//       // ----------------------------------------------------------------
+//       // process.cwd() ensures the path works in production (e.g., Vercel/Docker)
+//       const fontsDir = path.join(process.cwd(), "public", "fonts");
+//       const regularFontPath = path.join(fontsDir, "Roboto-Regular.ttf");
+//       const boldFontPath = path.join(fontsDir, "Roboto-Bold.ttf");
 
-//       // 1. Реквизиты поставщика (Ваша компания)
+//       // Defensive check to prevent silent PDF crashes if fonts are missing
+//       if (!fs.existsSync(regularFontPath) || !fs.existsSync(boldFontPath)) {
+//         console.error(
+//           "🚨 PDF Generation Error: Fonts missing in public/fonts/",
+//         );
+//         console.error(
+//           `Checked Paths:\n- ${regularFontPath}\n- ${boldFontPath}`,
+//         );
+//         throw new Error(
+//           "Не удалось загрузить шрифты (Roboto) для генерации PDF-счета. Пожалуйста, убедитесь, что они находятся в папке public/fonts/.",
+//         );
+//       }
+
+//       // Register fonts with clean aliases
+//       doc.registerFont("Roboto", regularFontPath);
+//       doc.registerFont("Roboto-Bold", boldFontPath);
+
+//       // Set default font to our registered Regular font
+//       doc.font("Roboto");
+
+//       // ----------------------------------------------------------------
+//       // 2. INVOICE HEADER & SUPPLIER REQUISITES
+//       // ----------------------------------------------------------------
 //       doc
 //         .fontSize(14)
 //         .text(
@@ -434,52 +737,81 @@ export const generateSubscriptionReceiptPDF = async (
 //         );
 //       doc.moveDown();
 
-//       // Таблица реквизитов (упрощенный пример)
 //       doc.fontSize(10);
 //       doc.text(`Организация: ООО "АМУЛЕТ КОМПАНИ"`);
 //       doc.text(`ИНН: 6319258622`);
 //       doc.text(`ОГРН: 1226300038360`);
 //       doc.text(`КПП: 1226300038360`);
-//       doc.text(`Расчетный счет: 40702810000000000000 `);
+//       doc.text(`Расчетный счет: 40702810000000000000`);
 //       doc.text(`Наименование банка: АО "ТИНЬКОФФ БАНК"`);
-//       doc.text(`БИК: 044525974 `);
+//       doc.text(`БИК: 044525974`);
 //       doc.moveDown();
 
-//       // 2. Заголовок счета
+//       // ----------------------------------------------------------------
+//       // 3. INVOICE TITLE & NUMBER
+//       // ----------------------------------------------------------------
+//       // In our updated architecture, the B2B invoice number is stored in providerTxId
+//       const invoiceNumber = paymentRecord.providerTxId;
+//       const amount = paymentRecord.amount;
+
+//       // Translate interval to Russian for the invoice line item
+//       const intervalNames = {
+//         month: "1 мес.",
+//         half_year: "6 мес.",
+//         year: "1 год",
+//       };
+//       const periodLabel = intervalNames[interval] || "период";
+
 //       doc
+//         .font("Roboto-Bold")
 //         .fontSize(16)
 //         .text(
-//           `СЧЕТ НА ОПЛАТУ № ${order.invoiceNumber} от ${new Date().toLocaleDateString("ru-RU")}`,
+//           `СЧЕТ НА ОПЛАТУ № ${invoiceNumber} от ${new Date().toLocaleDateString("ru-RU")}`,
 //           { align: "center" },
 //         );
 //       doc.moveDown();
 
-//       // 3. Реквизиты покупателя
-//       doc.fontSize(10);
-//       doc.text(`ПОКУПАТЕЛЬ: ${user.company_name} (ИНН: ${user.inn})`);
+//       // ----------------------------------------------------------------
+//       // 4. BUYER REQUISITES
+//       // ----------------------------------------------------------------
+//       doc.font("Roboto").fontSize(10);
+//       doc.text(
+//         `ПОКУПАТЕЛЬ: ${user.company_name || "Не указано"} (ИНН: ${user.inn || "Не указан"})`,
+//       );
 //       doc.text(`Адрес: ${user.city || "Не указан"}`);
 //       doc.moveDown();
 
-//       // 4. Позиции счета (Таблица)
-//       const vatAmount = order.amount * 0.2; // НДС 20%
-//       const amountWithoutVat = order.amount - vatAmount;
+//       // ----------------------------------------------------------------
+//       // 5. INVOICE ITEMS (TABLE REPLACEMENT)
+//       // ----------------------------------------------------------------
+//       const vatAmount = amount * 0.2; // 20% VAT
+//       const amountWithoutVat = amount - vatAmount;
 
-//       doc.text(`Наименование: Подписка "${plan.name}"`);
+//       doc.text(
+//         `Наименование: Корпоративная подписка "${plan.name}" (${periodLabel})`,
+//       );
 //       doc.text(`Количество: 1 шт.`);
 //       doc.text(`Сумма без НДС: ${amountWithoutVat.toFixed(2)} руб.`);
 //       doc.text(`НДС (20%): ${vatAmount.toFixed(2)} руб.`);
-//       doc.text(`Итого к оплате: ${order.amount.toFixed(2)} руб.`);
+
+//       doc.font("Roboto-Bold");
+//       doc.text(`Итого к оплате: ${amount.toFixed(2)} руб.`);
 //       doc.moveDown();
 
-//       // Назначение платежа (КРИТИЧНО ДЛЯ ВЕБХУКОВ)
-//       doc
-//         .font("Helvetica-Bold")
-//         .text(
-//           `Назначение платежа: Оплата по счету № ${order.invoiceNumber} за услуги платформы. Без НДС / В т.ч. НДС ${vatAmount.toFixed(2)} руб.`,
-//         );
+//       // ----------------------------------------------------------------
+//       // 6. PAYMENT PURPOSE (CRITICAL FOR BANK WEBHOOKS)
+//       // ----------------------------------------------------------------
+//       // The buyer MUST put this exact string in their wire transfer description
+//       // so our webhook (handleTinkoffB2BSubscriptionPurchase) can parse the INV- number.
+//       doc.text(
+//         `Назначение платежа: Оплата по счету № ${invoiceNumber} за услуги платформы. В т.ч. НДС ${vatAmount.toFixed(2)} руб.`,
+//       );
 
-//       // 5. Подписи и печати (можно вставить изображения)
-//       // doc.image("path/to/stamp.png", 100, 600, { width: 100 });
+//       // Optional: Add Stamp/Signature images here
+//       // const stampPath = path.join(process.cwd(), "public", "images", "stamp.png");
+//       // if (fs.existsSync(stampPath)) {
+//       //   doc.image(stampPath, 100, 600, { width: 100 });
+//       // }
 
 //       doc.end();
 //     } catch (error) {
@@ -487,134 +819,3 @@ export const generateSubscriptionReceiptPDF = async (
 //     }
 //   });
 // };
-
-export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ margin: 50 });
-      const buffers = [];
-
-      doc.on("data", buffers.push.bind(buffers));
-      doc.on("end", () => resolve(Buffer.concat(buffers)));
-
-      // ----------------------------------------------------------------
-      // 1. ROBUST FONT LOADING FOR CYRILLIC SUPPORT
-      // ----------------------------------------------------------------
-      // process.cwd() ensures the path works in production (e.g., Vercel/Docker)
-      const fontsDir = path.join(process.cwd(), "public", "fonts");
-      const regularFontPath = path.join(fontsDir, "Roboto-Regular.ttf");
-      const boldFontPath = path.join(fontsDir, "Roboto-Bold.ttf");
-
-      // Defensive check to prevent silent PDF crashes if fonts are missing
-      if (!fs.existsSync(regularFontPath) || !fs.existsSync(boldFontPath)) {
-        console.error(
-          "🚨 PDF Generation Error: Fonts missing in public/fonts/",
-        );
-        console.error(
-          `Checked Paths:\n- ${regularFontPath}\n- ${boldFontPath}`,
-        );
-        throw new Error(
-          "Не удалось загрузить шрифты (Roboto) для генерации PDF-счета. Пожалуйста, убедитесь, что они находятся в папке public/fonts/.",
-        );
-      }
-
-      // Register fonts with clean aliases
-      doc.registerFont("Roboto", regularFontPath);
-      doc.registerFont("Roboto-Bold", boldFontPath);
-
-      // Set default font to our registered Regular font
-      doc.font("Roboto");
-
-      // ----------------------------------------------------------------
-      // 2. INVOICE HEADER & SUPPLIER REQUISITES
-      // ----------------------------------------------------------------
-      doc
-        .fontSize(14)
-        .text(
-          "Внимание! Оплата данного счета означает согласие с условиями оферты.",
-          { align: "center" },
-        );
-      doc.moveDown();
-
-      doc.fontSize(10);
-      doc.text(`Организация: ООО "АМУЛЕТ КОМПАНИ"`);
-      doc.text(`ИНН: 6319258622`);
-      doc.text(`ОГРН: 1226300038360`);
-      doc.text(`КПП: 1226300038360`);
-      doc.text(`Расчетный счет: 40702810000000000000`);
-      doc.text(`Наименование банка: АО "ТИНЬКОФФ БАНК"`);
-      doc.text(`БИК: 044525974`);
-      doc.moveDown();
-
-      // ----------------------------------------------------------------
-      // 3. INVOICE TITLE & NUMBER
-      // ----------------------------------------------------------------
-      // In our updated architecture, the B2B invoice number is stored in providerTxId
-      const invoiceNumber = paymentRecord.providerTxId;
-      const amount = paymentRecord.amount;
-
-      // Translate interval to Russian for the invoice line item
-      const intervalNames = {
-        month: "1 мес.",
-        half_year: "6 мес.",
-        year: "1 год",
-      };
-      const periodLabel = intervalNames[interval] || "период";
-
-      doc
-        .font("Roboto-Bold")
-        .fontSize(16)
-        .text(
-          `СЧЕТ НА ОПЛАТУ № ${invoiceNumber} от ${new Date().toLocaleDateString("ru-RU")}`,
-          { align: "center" },
-        );
-      doc.moveDown();
-
-      // ----------------------------------------------------------------
-      // 4. BUYER REQUISITES
-      // ----------------------------------------------------------------
-      doc.font("Roboto").fontSize(10);
-      doc.text(
-        `ПОКУПАТЕЛЬ: ${user.company_name || "Не указано"} (ИНН: ${user.inn || "Не указан"})`,
-      );
-      doc.text(`Адрес: ${user.city || "Не указан"}`);
-      doc.moveDown();
-
-      // ----------------------------------------------------------------
-      // 5. INVOICE ITEMS (TABLE REPLACEMENT)
-      // ----------------------------------------------------------------
-      const vatAmount = amount * 0.2; // 20% VAT
-      const amountWithoutVat = amount - vatAmount;
-
-      doc.text(
-        `Наименование: Корпоративная подписка "${plan.name}" (${periodLabel})`,
-      );
-      doc.text(`Количество: 1 шт.`);
-      doc.text(`Сумма без НДС: ${amountWithoutVat.toFixed(2)} руб.`);
-      doc.text(`НДС (20%): ${vatAmount.toFixed(2)} руб.`);
-
-      doc.font("Roboto-Bold");
-      doc.text(`Итого к оплате: ${amount.toFixed(2)} руб.`);
-      doc.moveDown();
-
-      // ----------------------------------------------------------------
-      // 6. PAYMENT PURPOSE (CRITICAL FOR BANK WEBHOOKS)
-      // ----------------------------------------------------------------
-      // The buyer MUST put this exact string in their wire transfer description
-      // so our webhook (handleTinkoffB2BSubscriptionPurchase) can parse the INV- number.
-      doc.text(
-        `Назначение платежа: Оплата по счету № ${invoiceNumber} за услуги платформы. В т.ч. НДС ${vatAmount.toFixed(2)} руб.`,
-      );
-
-      // Optional: Add Stamp/Signature images here
-      // const stampPath = path.join(process.cwd(), "public", "images", "stamp.png");
-      // if (fs.existsSync(stampPath)) {
-      //   doc.image(stampPath, 100, 600, { width: 100 });
-      // }
-
-      doc.end();
-    } catch (error) {
-      reject(error);
-    }
-  });
-};

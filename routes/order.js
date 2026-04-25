@@ -1,6 +1,5 @@
 import { Router } from "express";
 import prisma from "../libs/prisma.js";
-import { fetchCached, invalidateKeys } from "../libs/redis.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { generateTicketPDF } from "../mailer/pdf-generator.js";
 
@@ -12,7 +11,8 @@ const router = Router();
  */
 router.get("/", verifyAuth, async (req, res) => {
   try {
-    if (req.user.role !== "admin")
+    // 🚨 FIX: Strict check for "administrator" instead of "admin"
+    if (req.user.role !== "administrator")
       return res.status(403).json({ message: "Access denied" });
 
     const [orders, invitations] = await Promise.all([
@@ -62,6 +62,7 @@ router.get("/", verifyAuth, async (req, res) => {
 
     res.json(unified);
   } catch (error) {
+    console.error("Admin Unified Orders Fetch Error:", error);
     res.status(500).json({ message: "Error fetching all orders" });
   }
 });
@@ -73,7 +74,18 @@ router.get("/", verifyAuth, async (req, res) => {
 router.get("/my", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
-    const userEmail = req.user.email;
+
+    // 🚨 FIX: Securely fetch the user to guarantee we have their email for RSVP lookups
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userEmail = user.email;
 
     // Fetch both types of tickets
     const [orders, invitations] = await Promise.all([
@@ -150,8 +162,14 @@ router.get("/:id/pdf", verifyAuth, async (req, res) => {
       include: { event: true, user: true },
     });
 
-    if (!order || (order.userId !== userId && req.user.role !== "admin")) {
-      return res.status(404).json({ message: "Order not found" });
+    // 🚨 FIX: Strict check for "administrator"
+    if (
+      !order ||
+      (order.userId !== userId && req.user.role !== "administrator")
+    ) {
+      return res
+        .status(404)
+        .json({ message: "Order not found or access denied" });
     }
 
     if (order.status !== "ACTIVE" && order.status !== "PAYMENT_SUCCESS") {
@@ -160,49 +178,88 @@ router.get("/:id/pdf", verifyAuth, async (req, res) => {
 
     const pdfBuffer = await generateTicketPDF(order, order.event, order.user);
 
+    // 🚨 FIX: Sanitize filename to prevent header corruption
+    const safeFilename = order.event.title.replace(/[^a-zA-Z0-9а-яА-Я]/g, "_");
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="Order_${orderId}.pdf"`,
+      `attachment; filename="Order_${safeFilename}.pdf"`,
     );
     res.send(pdfBuffer);
   } catch (error) {
+    console.error("Order PDF Error:", error);
     res.status(500).json({ message: "Failed to generate PDF" });
   }
 });
 
 /**
- * GET /api/invitations/:id/pdf
- * New Route: Handles PDF generation for FREE invitations
+ * GET /api/orders/invitation/:id/pdf
+ * Handles PDF generation for FREE invitations
  */
 router.get("/invitation/:id/pdf", verifyAuth, async (req, res) => {
   try {
     const inviteId = req.params.id;
-    const userEmail = req.user.email;
+    const userId = req.user.id;
+
+    // Securely fetch user email from DB
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, role: true },
+    });
+
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const invite = await prisma.invitation.findUnique({
       where: { id: inviteId },
       include: { event: true },
     });
 
+    // Case-insensitive email match, and strict admin check
     if (
       !invite ||
-      (invite.guestEmail !== userEmail && req.user.role !== "admin")
+      (invite.guestEmail.toLowerCase() !== user.email.toLowerCase() &&
+        user.role !== "administrator")
     ) {
-      return res.status(404).json({ message: "Invitation not found" });
+      return res
+        .status(404)
+        .json({ message: "Invitation not found or access denied" });
     }
 
-    // Mocking user object for generator since Invitations don't always have a User relation
-    const mockUser = { name: invite.guestName, email: invite.guestEmail };
-    const pdfBuffer = await generateTicketPDF(invite, invite.event, mockUser);
+    if (invite.status !== "ACCEPTED") {
+      return res.status(400).json({ message: "Invitation not confirmed" });
+    }
+
+    // Mocking user object for generator
+    const mockUser = {
+      name: invite.guestName || "Гость",
+      email: invite.guestEmail,
+    };
+
+    // 🚨 FIX: Map 'ticketToken' to 'ticketCode' so the PDF generator doesn't crash
+    const mockOrderPayload = {
+      ...invite,
+      ticketCode: invite.ticketToken,
+      ticketCount: 1,
+      totalPrice: 0,
+    };
+
+    const pdfBuffer = await generateTicketPDF(
+      mockOrderPayload,
+      invite.event,
+      mockUser,
+    );
+
+    const safeFilename = invite.event.title.replace(/[^a-zA-Z0-9а-яА-Я]/g, "_");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="Invite_${inviteId}.pdf"`,
+      `attachment; filename="Invite_${safeFilename}.pdf"`,
     );
     res.send(pdfBuffer);
   } catch (error) {
+    console.error("Invite PDF Error:", error);
     res.status(500).json({ message: "Failed to generate PDF" });
   }
 });

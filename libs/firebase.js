@@ -63,8 +63,6 @@ const sendPushNotification = async (type, title, body, target, data = {}) => {
       },
     };
 
-    console.log(type);
-    console.log(target);
     if (type === "topic") {
       return await messaging.send({
         ...baseMessage,

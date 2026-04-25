@@ -65,7 +65,12 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       return res.status(400).json({ message: "Не указан тариф или период." });
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    // 🚨 FIX: Include the performerProfile so we can access B2B fields (INN / Company)
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { performerProfile: true },
+    });
+
     const plan = await prisma.subscriptionPlan.findUnique({
       where: { id: planId },
     });
@@ -139,16 +144,17 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       price = Math.max(0, price - discountAmount);
     }
 
-    // 3. Determine B2B Status
-    const isB2B = ["individualEntrepreneur", "legalEntity", "agency"].includes(
-      user.account_type,
+    // 3. Determine B2B Status based on Performer Profile data presence
+    const isB2B = Boolean(
+      user.performerProfile?.inn && user.performerProfile?.company_name,
     );
 
     // ==========================================
     // SCENARIO A: B2B INVOICE (ООО / ИП)
     // ==========================================
-    if (isB2B && paymentMethod === "invoice") {
-      if (!user.inn || !user.company_name) {
+    if (paymentMethod === "invoice") {
+      // 🚨 FIX: We check the performer profile specifically
+      if (!isB2B) {
         return res.status(400).json({
           message:
             "Для выставления счета необходимо заполнить ИНН и Название компании в профиле.",
@@ -193,16 +199,23 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       });
 
       try {
-        // Pass the Payment Record to the PDF generator (Ensure PDF uses paymentRecord.providerTxId as invoice #)
+        // 🚨 FIX: Pass a mock user object to the PDF generator so it can find company_name and inn
+        const pdfUserPayload = {
+          ...user,
+          company_name: user.performerProfile.company_name,
+          inn: user.performerProfile.inn,
+        };
+
         const pdfBuffer = await generateB2BInvoicePDF(
           paymentRecord,
-          user,
+          pdfUserPayload,
           plan,
           interval,
         );
+
         await sendB2BInvoiceEmail(
           user.email,
-          user.company_name,
+          user.performerProfile.company_name,
           invoiceNumber,
           pdfBuffer,
         );
