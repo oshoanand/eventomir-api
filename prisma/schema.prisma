@@ -246,13 +246,15 @@ model CustomerProfile {
   // 🚨 RESTRICTED: Do not delete profile directly if user exists
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
-  city             String?
-  companyName      String? @map("company_name")
-  inn              String?
-  description      String? @db.Text
-  accountType      String? @map("account_type")
-  preferences      Json?   @default("{}")
-  moderationStatus Status  @default(PENDING) @map("moderation_status")
+  city              String?
+  address           String?
+  companyName       String? @map("company_name")
+  inn               String?
+  description       String? @db.Text
+  accountType       String? @map("account_type")
+  backgroundPicture String? @map("background_picture")
+  preferences       Json?   @default("{}")
+  moderationStatus  Status  @default(PENDING) @map("moderation_status")
 
   // 🚨 FIXED: Removed `bookingsRequests` from here, as they belong to `User`
   reviewsGiven Review[]      @relation("CustomerReviews")
@@ -273,6 +275,7 @@ model PerformerProfile {
   experience        String?
   priceRange        Int[]    @map("price_range")
   city              String?
+  address           String?
   roles             String[]
   accountType       String?  @map("account_type")
   backgroundPicture String?  @map("background_picture")
@@ -308,6 +311,7 @@ model PartnerProfile {
   inn              String?
   description      String? @db.Text
   city             String?
+  address          String?
   accountType      String? @map("account_type")
   moderationStatus Status  @default(PENDING) @map("moderation_status")
 

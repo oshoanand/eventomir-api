@@ -65,10 +65,14 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       return res.status(400).json({ message: "Не указан тариф или период." });
     }
 
-    // 🚨 FIX: Include the performerProfile so we can access B2B fields (INN / Company)
+    // 🚨 FIX 1: Include ALL profile types so we can safely check B2B status for any user role
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { performerProfile: true },
+      include: {
+        customerProfile: true,
+        performerProfile: true,
+        partnerProfile: true,
+      },
     });
 
     const plan = await prisma.subscriptionPlan.findUnique({
@@ -144,16 +148,26 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       price = Math.max(0, price - discountAmount);
     }
 
-    // 3. Determine B2B Status based on Performer Profile data presence
-    const isB2B = Boolean(
-      user.performerProfile?.inn && user.performerProfile?.company_name,
-    );
+    // 🚨 FIX 2: Safely extract active profile data (Prisma uses camelCase 'companyName')
+    const activeProfile =
+      user.customerProfile ||
+      user.performerProfile ||
+      user.partnerProfile ||
+      {};
+    const companyName = activeProfile.companyName || null;
+    const inn = activeProfile.inn || null;
+    const city = activeProfile.city || null;
+    const accountType = activeProfile.accountType || user.accountType;
+
+    const isB2B =
+      ["individualEntrepreneur", "legalEntity", "agency"].includes(
+        accountType,
+      ) && Boolean(inn && companyName);
 
     // ==========================================
     // SCENARIO A: B2B INVOICE (ООО / ИП)
     // ==========================================
     if (paymentMethod === "invoice") {
-      // 🚨 FIX: We check the performer profile specifically
       if (!isB2B) {
         return res.status(400).json({
           message:
@@ -165,7 +179,7 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       const invoiceNumber = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const dueDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000); // 5 Days valid
 
-      // Create Payment (NOT Order) via transaction to safely lock promo code usage
+      // Create Payment via transaction to safely lock promo code usage
       const [paymentRecord] = await prisma.$transaction(async (tx) => {
         const newPayment = await tx.payment.create({
           data: {
@@ -199,11 +213,12 @@ export const initiateSubscriptionCheckout = async (req, res) => {
       });
 
       try {
-        // 🚨 FIX: Pass a mock user object to the PDF generator so it can find company_name and inn
+        // 🚨 FIX 3: Pass a clean, guaranteed payload to the PDF generator
         const pdfUserPayload = {
           ...user,
-          company_name: user.performerProfile.company_name,
-          inn: user.performerProfile.inn,
+          company_name: companyName, // Mapped back to what the PDF generator expects
+          inn: inn,
+          city: city,
         };
 
         const pdfBuffer = await generateB2BInvoicePDF(
@@ -214,8 +229,8 @@ export const initiateSubscriptionCheckout = async (req, res) => {
         );
 
         await sendB2BInvoiceEmail(
-          user.email,
-          user.performerProfile.company_name,
+          userEmail,
+          companyName,
           invoiceNumber,
           pdfBuffer,
         );
@@ -235,7 +250,10 @@ export const initiateSubscriptionCheckout = async (req, res) => {
           if (appliedPromo) {
             await tx.promoCode.update({
               where: { id: appliedPromo.id },
-              data: { currentUses: { decrement: 1 } },
+              data: {
+                currentUses: { decrement: 1 },
+                usedByUsers: { disconnect: { id: userId } }, // Revert relation
+              },
             });
           }
         });
@@ -266,13 +284,11 @@ export const initiateSubscriptionCheckout = async (req, res) => {
         newEndDate.setFullYear(newEndDate.getFullYear() + 1);
 
       await prisma.$transaction(async (tx) => {
-        // 1. Deduct from user balance
         await tx.user.update({
           where: { id: userId },
           data: { walletBalance: { decrement: price } },
         });
 
-        // 2. Add to transaction history
         await tx.walletTransaction.create({
           data: {
             userId: userId,
@@ -282,7 +298,6 @@ export const initiateSubscriptionCheckout = async (req, res) => {
           },
         });
 
-        // 3. Update active subscription
         await tx.userSubscription.upsert({
           where: { userId: userId },
           update: {
@@ -306,7 +321,6 @@ export const initiateSubscriptionCheckout = async (req, res) => {
           },
         });
 
-        // 4. Record as completed payment
         await tx.payment.create({
           data: {
             userId: userId,
@@ -317,11 +331,13 @@ export const initiateSubscriptionCheckout = async (req, res) => {
           },
         });
 
-        // 5. Increment promo usage
         if (appliedPromo) {
           await tx.promoCode.update({
             where: { id: appliedPromo.id },
-            data: { currentUses: { increment: 1 } },
+            data: {
+              currentUses: { increment: 1 },
+              usedByUsers: { connect: { id: userId } },
+            },
           });
         }
       });
@@ -345,7 +361,6 @@ export const initiateSubscriptionCheckout = async (req, res) => {
     });
 
     try {
-      // Send the request to Tinkoff to get the checkout URL
       const tinkoffData = await initTinkoffSubscriptionPayment(
         payment.id,
         price,
@@ -354,7 +369,6 @@ export const initiateSubscriptionCheckout = async (req, res) => {
         userEmail,
       );
 
-      // Save Tinkoff's generated ID and increment the Promo Code usage
       await prisma.$transaction(async (tx) => {
         await tx.payment.update({
           where: { id: payment.id },
@@ -364,12 +378,14 @@ export const initiateSubscriptionCheckout = async (req, res) => {
         if (appliedPromo) {
           await tx.promoCode.update({
             where: { id: appliedPromo.id },
-            data: { currentUses: { increment: 1 } },
+            data: {
+              currentUses: { increment: 1 },
+              usedByUsers: { connect: { id: userId } },
+            },
           });
         }
       });
 
-      // Redirect client to Tinkoff payment gateway
       return res.status(200).json({
         success: true,
         isB2B: false,

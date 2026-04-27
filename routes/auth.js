@@ -111,10 +111,14 @@ router.post("/app/login", async (req, res) => {
       return res.status(500).json({ message: "Ошибка конфигурации сервера." });
     }
 
-    const token = jwt.sign({ id: user.id, role: user.role }, secret, {
-      expiresIn: "30d",
-      algorithm: "HS256",
-    });
+    const token = jwt.sign(
+      { id: user.id, role: user.role, email: user.email },
+      secret,
+      {
+        expiresIn: "30d",
+        algorithm: "HS256",
+      },
+    );
 
     res.status(200).json({
       message: "Успешный вход",
@@ -173,12 +177,15 @@ router.post("/admin/login", async (req, res) => {
       return res.status(500).json({ message: "Ошибка конфигурации сервера." });
     }
 
-    const token = jwt.sign({ id: user.id, role: user.role }, secret, {
-      expiresIn: "30d",
-      algorithm: "HS256",
-    });
+    const token = jwt.sign(
+      { id: user.id, role: user.role, email: user.email },
+      secret,
+      {
+        expiresIn: "30d",
+        algorithm: "HS256",
+      },
+    );
 
-    console.log(token);
     res.status(200).json({
       message: "Успешный вход",
       token,
@@ -258,10 +265,14 @@ router.post("/oauth", async (req, res) => {
       return res.status(500).json({ message: "Ошибка конфигурации сервера." });
     }
 
-    const token = jwt.sign({ id: user.id, role: user.role }, secret, {
-      expiresIn: "30d",
-      algorithm: "HS256",
-    });
+    const token = jwt.sign(
+      { id: user.id, role: user.role, email: user.email },
+      secret,
+      {
+        expiresIn: "30d",
+        algorithm: "HS256",
+      },
+    );
 
     const { features, subscriptionEndDate } = await getUserSubscriptionData(
       user.id,

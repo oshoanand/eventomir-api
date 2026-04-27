@@ -2,36 +2,40 @@ import prisma from "../libs/prisma.js";
 import { initTinkoffRequestPayment } from "../utils/tinkoff.js";
 import "dotenv/config";
 
-// 🚨 IMPORT THE NEW MASTER DISPATCHER
+// 🚨 MASTER DISPATCHER
 import { notifyUser } from "../services/notification.js";
 
 // Fixed price for publishing a request (in RUB)
-const REQUEST_PRICE = process.env.REQUEST_PRICE || 490;
+const REQUEST_PRICE = parseInt(process.env.REQUEST_PRICE) || 490;
 
 // ==========================================
 // HELPER: Targeted Notifications
 // ==========================================
 export const notifyTargetedPerformers = async (requestData, customerName) => {
   try {
-    // 🚨 FIX: Query PerformerProfile instead of Base User for city and roles
+    const whereClause = {
+      roles: { has: requestData.category },
+    };
+
+    // Only filter by city if the request isn't remote/online
+    if (requestData.city) {
+      whereClause.city = requestData.city;
+    }
+
     const targetProfiles = await prisma.performerProfile.findMany({
-      where: {
-        city: requestData.city,
-        roles: { has: requestData.category },
-        user: { status: "active" }, // Base user is active
-      },
+      where: whereClause,
       select: { userId: true }, // We need the Base User ID to send notifications
     });
 
     if (targetProfiles.length === 0) return;
 
-    const msg = `Новый заказ в г. ${requestData.city}: ${requestData.category} (Бюджет: ${requestData.budget || "не указан"})`;
+    const msg = `Новый заказ в г. ${requestData.city || "Онлайн"}: ${requestData.category} (Бюджет: ${requestData.budget || "по договоренности"})`;
 
-    // 🚨 Dispatch real-time socket, DB, and FCM push notifications asynchronously
+    // Dispatch real-time socket, DB, and FCM push notifications asynchronously
     const promises = targetProfiles.map((profile) =>
       notifyUser({
         userId: profile.userId, // Base User ID
-        title: "🔔 Новый заказ в вашем городе!",
+        title: "🔔 Новый заказ по вашей специализации!",
         body: msg,
         type: "NEW_REQUEST",
         data: {
@@ -45,7 +49,7 @@ export const notifyTargetedPerformers = async (requestData, customerName) => {
     await Promise.all(promises);
 
     console.log(
-      `✅ Notified ${targetProfiles.length} performers in ${requestData.city}`,
+      `✅ Notified ${targetProfiles.length} performers for request ${requestData.id}`,
     );
   } catch (error) {
     console.error("❌ Error notifying performers:", error);
@@ -63,11 +67,13 @@ export const createPaidRequest = async (req, res) => {
     const { category, serviceDescription, budget, city, paymentMethod } =
       req.body;
 
-    if (!category || !serviceDescription || !city || !paymentMethod) {
-      return res.status(400).json({ message: "Missing required fields." });
+    if (!category || !serviceDescription || !paymentMethod) {
+      return res
+        .status(400)
+        .json({ message: "Не заполнены обязательные поля." });
     }
 
-    // 🚨 FIX: Fetch the Customer Profile ID securely
+    // Fetch the Customer Profile ID securely
     const profile = await prisma.customerProfile.findUnique({
       where: { userId: userId },
       include: { user: { select: { name: true, walletBalance: true } } },
@@ -76,7 +82,10 @@ export const createPaidRequest = async (req, res) => {
     if (!profile) {
       return res
         .status(403)
-        .json({ message: "Необходимо заполнить профиль заказчика." });
+        .json({
+          message:
+            "Необходимо заполнить профиль заказчика перед созданием заявки.",
+        });
     }
 
     const customerProfileId = profile.id;
@@ -89,47 +98,58 @@ export const createPaidRequest = async (req, res) => {
       if (profile.user.walletBalance < REQUEST_PRICE) {
         return res
           .status(400)
-          .json({ message: "Недостаточно средств на кошельке." });
+          .json({ message: "Недостаточно средств на внутреннем кошельке." });
       }
 
       const requestRecord = await prisma.$transaction(async (tx) => {
-        // 2. Deduct Balance safely
+        // 1. Deduct Balance safely
         await tx.user.update({
           where: { id: userId },
           data: { walletBalance: { decrement: REQUEST_PRICE } },
         });
 
-        // 3. Create Ledger Entry
+        // 2. Create the Request (Status: OPEN immediately)
+        const newReq = await tx.paidRequest.create({
+          data: {
+            customerId: customerProfileId,
+            category,
+            serviceDescription,
+            city: city || null,
+            budget: budget || null,
+            status: "OPEN",
+          },
+        });
+
+        // 3. Create Ledger Entry for UI History
         await tx.walletTransaction.create({
           data: {
             userId: userId,
             amount: -REQUEST_PRICE,
             type: "PAYMENT",
-            description: `Оплата публикации заявки: ${category} в г. ${city}`,
+            description: `Оплата публикации заявки: ${category}`,
           },
         });
 
-        // 4. Create the Request (Status: OPEN immediately)
-        const newReq = await tx.paidRequest.create({
+        // 4. 🚨 FIX: Missing Payment Record! Must create a completed payment for accounting.
+        await tx.payment.create({
           data: {
-            customerId: customerProfileId, // 🚨 FIX: Connects to CustomerProfile
-            category,
-            serviceDescription,
-            city,
-            budget,
-            status: "OPEN",
+            userId: userId,
+            amount: REQUEST_PRICE,
+            provider: "wallet",
+            status: "COMPLETED",
+            paidRequest: { connect: { id: newReq.id } },
           },
         });
 
         return newReq;
       });
 
-      // 5. Fire notifications (Outside the transaction to keep DB locks fast)
+      // 5. Fire notifications (Outside the transaction to prevent DB bottlenecks)
       await notifyTargetedPerformers(requestRecord, customerName);
 
       return res.status(201).json({
         success: true,
-        message: "Оплачено с кошелька и опубликовано!",
+        message: "Заявка оплачена с кошелька и успешно опубликована!",
         requiresGateway: false,
       });
     }
@@ -141,18 +161,18 @@ export const createPaidRequest = async (req, res) => {
       // 1. Create Pending Request & Payment in DB
       const newRequest = await prisma.paidRequest.create({
         data: {
-          customerId: customerProfileId, // 🚨 FIX: Connects to CustomerProfile
+          customerId: customerProfileId,
           category,
           serviceDescription,
-          city,
-          budget,
+          city: city || null,
+          budget: budget || null,
           status: "PENDING_PAYMENT",
         },
       });
 
       const paymentRecord = await prisma.payment.create({
         data: {
-          userId: userId, // 🚨 Payment links to the Base User
+          userId: userId,
           amount: REQUEST_PRICE,
           provider: "tinkoff",
           status: "PENDING",
@@ -182,7 +202,7 @@ export const createPaidRequest = async (req, res) => {
           paymentUrl: tinkoffData.paymentUrl,
         });
       } catch (tinkoffError) {
-        // If Tinkoff API fails, mark our internal payment as failed
+        // Rollback internal payment status if gateway API fails
         await prisma.payment.update({
           where: { id: paymentRecord.id },
           data: { status: "FAILED" },
@@ -191,16 +211,19 @@ export const createPaidRequest = async (req, res) => {
       }
     }
 
-    return res.status(400).json({ message: "Invalid payment method." });
+    return res
+      .status(400)
+      .json({ message: "Выбран недопустимый метод оплаты." });
   } catch (error) {
     if (error.message === "TINKOFF_INIT_FAILED") {
       return res
         .status(502)
-        .json({ message: "Ошибка шлюза оплаты. Попробуйте позже." });
+        .json({
+          message: "Ошибка шлюза оплаты. Пожалуйста, попробуйте позже.",
+        });
     }
-
     console.error("Create Request Error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: "Внутренняя ошибка сервера" });
   }
 };
 
@@ -211,7 +234,6 @@ export const getCustomerRequests = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 🚨 FIX: First find the Customer Profile ID
     const profile = await prisma.customerProfile.findUnique({
       where: { userId: userId },
       select: { id: true },
@@ -221,7 +243,7 @@ export const getCustomerRequests = async (req, res) => {
 
     const requests = await prisma.paidRequest.findMany({
       where: {
-        customerId: profile.id, // Query using Profile ID
+        customerId: profile.id,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -229,7 +251,7 @@ export const getCustomerRequests = async (req, res) => {
     res.status(200).json(requests);
   } catch (error) {
     console.error("Get Customer Requests Error:", error);
-    res.status(500).json({ message: "Failed to fetch requests" });
+    res.status(500).json({ message: "Не удалось загрузить ваши заявки" });
   }
 };
 
@@ -265,24 +287,101 @@ export const getRequestsFeed = async (req, res) => {
       include: {
         customer: {
           include: {
-            user: { select: { name: true, image: true } }, // 🚨 FIX: Deep populate base User
+            user: { select: { name: true, image: true } },
           },
         },
       },
     });
 
-    // 🚨 FIX: Flatten the data structure so the frontend gets what it expects
+    // Flatten the data structure so the frontend gets what it expects
     const flattenedRequests = requests.map((req) => ({
       ...req,
       customer: {
         name: req.customer.user.name,
-        profile_picture: req.customer.user.image, // Map image back to profile_picture for legacy UI support
+        profile_picture: req.customer.user.image,
       },
     }));
 
     res.status(200).json(flattenedRequests);
   } catch (error) {
     console.error("Feed Error:", error);
-    res.status(500).json({ message: "Failed to fetch feed" });
+    res.status(500).json({ message: "Не удалось загрузить ленту заявок" });
+  }
+};
+
+// ==========================================
+// 4. 🚨 ADDED: GET SINGLE REQUEST (Increments Views)
+// ==========================================
+export const getRequestById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const request = await prisma.paidRequest.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          include: {
+            user: { select: { name: true, image: true, phone: true } },
+          },
+        },
+      },
+    });
+
+    if (!request)
+      return res.status(404).json({ message: "Заявка не найдена." });
+
+    // Safely increment the view counter
+    await prisma.paidRequest.update({
+      where: { id },
+      data: { views: { increment: 1 } },
+    });
+
+    res.status(200).json({
+      ...request,
+      views: request.views + 1, // Reflect the increment immediately in the response
+      customer: {
+        name: request.customer.user.name,
+        profile_picture: request.customer.user.image,
+        phone: request.customer.user.phone,
+      },
+    });
+  } catch (error) {
+    console.error("Get Single Request Error:", error);
+    res.status(500).json({ message: "Не удалось загрузить данные заявки." });
+  }
+};
+
+// ==========================================
+// 5. 🚨 ADDED: CLOSE/ARCHIVE REQUEST (By Customer)
+// ==========================================
+export const closeRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const request = await prisma.paidRequest.findUnique({
+      where: { id },
+      include: { customer: true },
+    });
+
+    if (!request)
+      return res.status(404).json({ message: "Заявка не найдена." });
+
+    // Security check: only the owner can close it
+    if (request.customer.userId !== userId) {
+      return res
+        .status(403)
+        .json({ message: "У вас нет прав для закрытия этой заявки." });
+    }
+
+    const updatedRequest = await prisma.paidRequest.update({
+      where: { id },
+      data: { status: "CLOSED" },
+    });
+
+    res.status(200).json(updatedRequest);
+  } catch (error) {
+    console.error("Close Request Error:", error);
+    res.status(500).json({ message: "Не удалось закрыть заявку." });
   }
 };

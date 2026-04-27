@@ -248,13 +248,13 @@ router.get("/:customerId/favorites", verifyUserOwnership, async (req, res) => {
     if (!customerProfile) return res.status(200).json([]);
 
     const favorites = await prisma.favorite.findMany({
-      where: { customer_id: customerProfile.id },
+      where: { customerId: customerProfile.id }, // camelCase
       include: {
         performer: {
           include: { user: { select: { id: true, name: true, image: true } } },
         },
       },
-      orderBy: { created_at: "desc" },
+      orderBy: { createdAt: "desc" }, // camelCase
     });
 
     const formattedFavorites = favorites.map((fav) => ({
@@ -298,15 +298,17 @@ router.post("/:customerId/favorites", verifyUserOwnership, async (req, res) => {
 
     await prisma.favorite.upsert({
       where: {
-        customer_id_performer_id: {
-          customer_id: customerProfile.id,
-          performer_id: performerProfile.id,
+        // camelCase compound key
+        customerId_performerId: {
+          customerId: customerProfile.id,
+          performerId: performerProfile.id,
         },
       },
       update: {},
       create: {
-        customer_id: customerProfile.id,
-        performer_id: performerProfile.id,
+        // camelCase fields
+        customerId: customerProfile.id,
+        performerId: performerProfile.id,
       },
     });
 
@@ -338,9 +340,10 @@ router.get(
 
       const favorite = await prisma.favorite.findUnique({
         where: {
-          customer_id_performer_id: {
-            customer_id: customerProfile.id,
-            performer_id: performerProfile.id,
+          // camelCase compound key
+          customerId_performerId: {
+            customerId: customerProfile.id,
+            performerId: performerProfile.id,
           },
         },
       });
@@ -373,16 +376,18 @@ router.delete(
         return res.status(404).json({ message: "Профиль не найден" });
       }
 
-      await prisma.favorite.delete({
+      // Use deleteMany to safely execute even if rapidly clicked multiple times
+      await prisma.favorite.deleteMany({
         where: {
-          customer_id_performer_id: {
-            customer_id: customerProfile.id,
-            performer_id: performerProfile.id,
-          },
+          // camelCase direct fields
+          customerId: customerProfile.id,
+          performerId: performerProfile.id,
         },
       });
 
-      res.status(204).send();
+      res
+        .status(200)
+        .json({ success: true, message: "Removed from favorites" });
     } catch (error) {
       console.error("Error removing from favorites:", error);
       res.status(500).json({ message: "Internal Server Error" });

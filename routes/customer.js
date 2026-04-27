@@ -2,12 +2,18 @@ import express from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { createUploader } from "../utils/multer.js";
-import { optimizeAndUpload } from "../utils/imageProcessor.js"; // 🚨 FIX: Added image processor
+import { optimizeAndUpload } from "../utils/imageProcessor.js";
 
 const router = express.Router();
 
 // Initialize memory uploader with 5MB limit
 const profileUpload = createUploader(5);
+
+// 🚨 FIX: Configure Multer to accept multiple specific fields instead of a single file
+const profileUploadFields = profileUpload.fields([
+  { name: "profilePictureFile", maxCount: 1 },
+  { name: "backgroundPictureFile", maxCount: 1 },
+]);
 
 // ==========================================
 // GET CUSTOMER PROFILE
@@ -16,7 +22,6 @@ router.get("/profile", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 🚨 FIX: Include the customerProfile to get the city
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
@@ -29,17 +34,20 @@ router.get("/profile", verifyAuth, async (req, res) => {
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Map DB fields to Frontend camelCase
+    // Map DB fields to Frontend expected camelCase format
     const profileData = {
       id: user.id,
       name: user.name || "",
       email: user.email,
       phone: user.phone || "",
-      city: user.customerProfile?.city || "", // 🚨 FIX: Extract from profile
-      profilePicture: user.image || "", // 🚨 FIX: Extract from new image field
+      profilePicture: user.image || "",
       role: user.role,
       walletBalance: user.walletBalance || 0,
       unreadNotifications: user._count?.notifications || 0,
+      city: user.customerProfile?.city || "",
+      address: user.customerProfile?.address || "",
+      backgroundPicture: user.customerProfile?.backgroundPicture || "",
+      moderationStatus: user.customerProfile?.moderationStatus,
     };
 
     res.status(200).json(profileData);
@@ -52,60 +60,80 @@ router.get("/profile", verifyAuth, async (req, res) => {
 // ==========================================
 // UPDATE CUSTOMER PROFILE
 // ==========================================
-router.put(
-  "/profile",
-  verifyAuth,
-  profileUpload.single("profile_image"),
-  async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { name, phone, city } = req.body;
+router.put("/profile", verifyAuth, profileUploadFields, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { name, phone, city, address } = req.body;
 
-      // 1. Process Image Upload via MinIO if a file is provided
-      let imageUrl = undefined;
-      if (req.file) {
-        imageUrl = await optimizeAndUpload(
-          req.file,
-          "profiles",
-          userId,
-          800, // standard profile picture width
-        );
-      }
+    // 1. Process Profile Picture Upload
+    let profilePicUrl = undefined;
+    if (req.files && req.files["profilePictureFile"]) {
+      profilePicUrl = await optimizeAndUpload(
+        req.files["profilePictureFile"][0],
+        "profiles",
+        userId,
+        800,
+      );
+    }
 
-      // 2. 🚨 FIX: Use Nested Writes to update User and CustomerProfile simultaneously
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: {
-          name: name || undefined,
-          phone: phone || undefined,
-          ...(imageUrl && { image: imageUrl }), // Only update image if new one was uploaded
-          customerProfile: {
-            upsert: {
-              create: { city: city || null },
-              update: { city: city || null },
+    // 2. Process Background Cover Upload
+    let bgPicUrl = undefined;
+    if (req.files && req.files["backgroundPictureFile"]) {
+      bgPicUrl = await optimizeAndUpload(
+        req.files["backgroundPictureFile"][0],
+        "profiles/backgrounds",
+        userId,
+        1920,
+      );
+    }
+
+    // 3. Update User and CustomerProfile simultaneously
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name: name || undefined,
+        phone: phone || undefined,
+        ...(profilePicUrl && { image: profilePicUrl }),
+        customerProfile: {
+          upsert: {
+            create: {
+              city: city || null,
+              address: address || null,
+
+              ...(bgPicUrl && { backgroundPicture: bgPicUrl }),
+            },
+            update: {
+              city: city || null,
+              address: address || null,
+
+              ...(bgPicUrl && { backgroundPicture: bgPicUrl }),
             },
           },
         },
-        include: { customerProfile: true },
-      });
+      },
+      include: { customerProfile: true },
+    });
 
-      // 3. Return the FULL updated profile so the frontend cache can instantly update
-      res.status(200).json({
-        id: updatedUser.id,
-        name: updatedUser.name || "",
-        email: updatedUser.email,
-        phone: updatedUser.phone || "",
-        city: updatedUser.customerProfile?.city || "",
-        profilePicture: updatedUser.image || "",
-        role: updatedUser.role,
-        walletBalance: updatedUser.walletBalance || 0,
-      });
-    } catch (error) {
-      console.error("Update error:", error);
-      res.status(500).json({ message: "Update failed" });
-    }
-  },
-);
+    // 4. Return the FULL updated profile so the frontend cache instantly updates
+    res.status(200).json({
+      id: updatedUser.id,
+      name: updatedUser.name || "",
+      email: updatedUser.email,
+      phone: updatedUser.phone || "",
+      profilePicture: updatedUser.image || "",
+      role: updatedUser.role,
+      walletBalance: updatedUser.walletBalance || 0,
+
+      city: updatedUser.customerProfile?.city || "",
+      address: updatedUser.customerProfile?.address || "",
+
+      backgroundPicture: updatedUser.customerProfile?.backgroundPicture || "",
+    });
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).json({ message: "Update failed" });
+  }
+});
 
 // ==========================================
 // GET ORDER HISTORY (BOOKINGS)
@@ -114,37 +142,29 @@ router.get("/orders", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 1. 🚨 FIX: Get the underlying CustomerProfile ID first
-    const customerProfile = await prisma.customerProfile.findUnique({
-      where: { userId: userId },
-    });
-
-    if (!customerProfile) {
-      return res.status(200).json([]); // No profile = no bookings
-    }
-
-    // 2. 🚨 FIX: Query Bookings using CustomerProfile ID and deep populate Performer
-    const bookings = await prisma.booking.findMany({
-      where: { customerId: customerProfile.id },
+    // 🚨 FIX: In your schema, `customerId` on `BookingRequest` connects directly to the Base `User` ID.
+    // There is no need to query `CustomerProfile` first to get bookings!
+    const bookings = await prisma.bookingRequest.findMany({
+      where: { customerId: userId },
       include: {
         performer: {
           include: {
-            user: { select: { id: true, name: true } }, // Deep fetch Base User name
+            user: { select: { id: true, name: true } },
           },
         },
       },
-      orderBy: { date: "desc" },
+      orderBy: { createdAt: "desc" },
     });
 
-    // 3. Map to frontend OrderHistoryItem interface
+    // Map to frontend OrderHistoryItem interface
     const history = bookings.map((b) => ({
       id: b.id,
-      performerId: b.performer.user.id, // Point back to Base User ID for frontend routing
-      performerName: b.performer.user.name || "Неизвестный исполнитель",
-      service: b.details || "Бронирование", // Default fallback if no details provided
+      performerId: b.performer?.user?.id || b.performerId,
+      performerName: b.performer?.user?.name || "Неизвестный исполнитель",
+      service: b.details || "Оформление заказа",
       date: b.date,
       status: b.status,
-      price: 0, // Replace with actual price logic if added to Booking model
+      price: b.agreedFee || 0, // 🚨 FIX: Mapped to the real fee from our negotiation system
     }));
 
     res.status(200).json(history);

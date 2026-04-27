@@ -2,6 +2,7 @@ import { Router } from "express";
 import prisma from "../libs/prisma.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { initTinkoffEscrowPayment } from "../utils/tinkoff.js";
+import { notifyUser } from "../services/notification.js";
 
 const router = Router();
 
@@ -25,6 +26,8 @@ router.post("/", verifyAuth, async (req, res) => {
   try {
     const { performerId, date, details } = req.body;
     const customerId = req.user.id;
+    console.log(req.body);
+    console.log(req.user.id);
 
     if (performerId === customerId)
       return res
@@ -34,6 +37,8 @@ router.post("/", verifyAuth, async (req, res) => {
     const performer = await prisma.performerProfile.findUnique({
       where: { userId: performerId },
     });
+    // console.log(performer);
+
     if (!performer)
       return res.status(404).json({ message: "Исполнитель не найден." });
 
@@ -43,6 +48,7 @@ router.post("/", verifyAuth, async (req, res) => {
         new Date(d).toISOString().split("T")[0] ===
         new Date(date).toISOString().split("T")[0],
     );
+    console.log(isBusy);
     if (isBusy) return res.status(400).json({ message: "Дата уже занята." });
 
     const booking = await prisma.$transaction(async (tx) => {
@@ -63,6 +69,17 @@ router.post("/", verifyAuth, async (req, res) => {
       return newBooking;
     });
 
+    console.log(booking);
+    // 🚨 NOTIFY PERFORMER: New Booking Request
+    // Run asynchronously (without await) so it doesn't block the HTTP response
+    notifyUser({
+      userId: performer.userId, // Target the base user ID of the performer
+      title: "📅 Новый запрос на бронирование",
+      body: "У вас новый запрос на бронирование. Проверьте детали и укажите вашу цену.",
+      type: "NEW_BOOKING",
+      data: { url: "/bookings", bookingId: booking.id },
+    }).catch((err) => console.error("Notification failed silently:", err));
+
     res.status(201).json(booking);
   } catch (error) {
     console.error("Create Booking Error:", error);
@@ -71,7 +88,7 @@ router.post("/", verifyAuth, async (req, res) => {
 });
 
 // ==========================================
-// 🚨 RESTORED: GET MY BOOKINGS (MADE & RECEIVED)
+// GET MY BOOKINGS (MADE & RECEIVED)
 // ==========================================
 router.get("/my", verifyAuth, async (req, res) => {
   try {
@@ -185,6 +202,25 @@ router.patch("/:id/performer-reply", verifyAuth, async (req, res) => {
       }
     });
 
+    // 🚨 NOTIFY CUSTOMER: Performer's decision
+    if (action === "REJECT") {
+      notifyUser({
+        userId: booking.customerId,
+        title: "❌ Бронирование отклонено",
+        body: `Исполнитель не смог принять ваш заказ. Причина: ${rejectionReason}`,
+        type: "BOOKING_REJECTED",
+        data: { url: "/bookings", bookingId: booking.id },
+      }).catch(console.error);
+    } else if (action === "ACCEPT") {
+      notifyUser({
+        userId: booking.customerId,
+        title: "✅ Бронирование подтверждено!",
+        body: `Исполнитель готов выполнить заказ. Ожидается оплата: ${agreedFee} ₽.`,
+        type: "BOOKING_ACCEPTED",
+        data: { url: "/bookings", bookingId: booking.id },
+      }).catch(console.error);
+    }
+
     res.status(200).json({ message: "Ответ успешно сохранен." });
   } catch (error) {
     res.status(400).json({ message: error.message || "Ошибка обновления." });
@@ -199,7 +235,11 @@ router.patch("/:id/customer-cancel", verifyAuth, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const booking = await prisma.bookingRequest.findUnique({ where: { id } });
+    // Include the performer so we can get their base userId to notify them
+    const booking = await prisma.bookingRequest.findUnique({
+      where: { id },
+      include: { performer: true },
+    });
 
     if (!booking || booking.customerId !== userId)
       return res.status(403).json({ message: "Доступ запрещен." });
@@ -213,6 +253,15 @@ router.patch("/:id/customer-cancel", verifyAuth, async (req, res) => {
       });
       await createAuditLog(tx, id, userId, "CUSTOMER_DECLINED_FEE");
     });
+
+    // 🚨 NOTIFY PERFORMER: Deal Cancelled
+    notifyUser({
+      userId: booking.performer.userId,
+      title: "🚫 Бронирование отменено",
+      body: `Заказчик отменил бронирование и отказался от оплаты.`,
+      type: "BOOKING_CANCELLED",
+      data: { url: "/bookings", bookingId: booking.id },
+    }).catch(console.error);
 
     res.status(200).json({ message: "Бронирование отменено." });
   } catch (error) {
@@ -242,8 +291,6 @@ router.post("/:id/pay", verifyAuth, async (req, res) => {
     const platformFee = totalAmount * 0.1; // 10% Platform fee
     const netAmount = totalAmount - platformFee;
 
-    // 🚨 FIX: Wrapped the payment creation and Tinkoff init in a Transaction!
-    // If Tinkoff fails to initialize, the DB payment record and audit log are safely rolled back.
     const checkoutUrl = await prisma.$transaction(async (tx) => {
       // 1. Pre-create pending DB payment
       const paymentRecord = await tx.payment.create({

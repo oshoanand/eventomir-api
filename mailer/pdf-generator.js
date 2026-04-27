@@ -471,11 +471,7 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
 
       doc.fontSize(8);
       // Top Left Cell
-      doc.text(
-        "ПОВОЛЖСКИЙ БАНК ПАО СБЕРБАНК г. Самара",
-        startX + 5,
-        startY + 5,
-      );
+      doc.text("ПОВОЛЖСКИЙ БАНК Т-Банк г. Самара", startX + 5, startY + 5);
       doc.text("Банк получателя", startX + 5, startY + 25);
 
       // Top Right Cells
@@ -485,15 +481,15 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
       doc.text("30101810200000000607", 340, startY + 15);
 
       // Middle Left Cells
-      doc.text("ИНН 631805965520", startX + 5, startY + 40);
-      doc.text("КПП", 175, startY + 40);
+      doc.text("ИНН 6319258622", startX + 5, startY + 40);
+      doc.text("КПП 631901001", 175, startY + 40);
 
       // Bottom Right Cell
       doc.text("Сч. №", 305, startY + 30);
       doc.text("40802810054400037540", 340, startY + 30);
 
       // Bottom Left Cell
-      doc.text("ИП Соломатникова Елена Сергеевна", startX + 5, startY + 55);
+      doc.text("ООО АМУЛЕТ КОМПАНИ", startX + 5, startY + 55);
       doc.text("Получатель", startX + 5, startY + 65);
 
       startY += 100;
@@ -509,7 +505,7 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
 
       doc.font("Roboto-Bold").fontSize(14);
       doc.text(
-        `Счет на оплату № ${invoiceNumber} от ${dateStr} г.`,
+        `Счет на оплату № ${invoiceNumber} от ${dateStr} `,
         startX,
         startY,
       );
@@ -524,8 +520,8 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
       // 4. PARTIES INFO
       doc.fontSize(10);
       const supplierText =
-        "ИП Соломатникова Е. С., ИНН 631805965520, 443081, Самарская обл, Самара г, Советской Армии ул, дом № 181, корпус 6Б, квартира 46";
-      const buyerText = `${user.company_name || "ООО Покупатель"}, ИНН ${user.inn || "Не указан"}, КПП ${user.kpp || "Не указан"}, ${user.city || "Адрес не указан"}`;
+        "ООО АМУЛЕТ КОМПАНИ, ИНН 6319258622, КПП 631901001, 443052, Самарская Область, г.о. Самара, вн.р-н Промышленный, г Самара, пер Льговский, дом 21, офис 3";
+      const buyerText = `${user.company_name || "ООО Покупатель"}, ИНН ${user.inn || "Не указан"}, КПП ${user.kpp || "Не указан"}, ${user.city} г, ${user.address || ""} `;
 
       doc.font("Roboto-Bold").text("Поставщик", startX, startY);
       doc.text("(Исполнитель):", startX, startY + 12);
@@ -629,7 +625,7 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
       doc.text("Итого:", 445, startY);
       doc.text(amountStr, 495, startY);
       startY += 15;
-      doc.text("Без налога (НДС)", 445, startY); // Using simplified tax system as requested
+      doc.text("Без налога (НДС)", 445, startY);
       startY += 15;
       doc.text("Всего к оплате:", 405, startY);
       doc.text(amountStr, 495, startY);
@@ -680,10 +676,11 @@ export const generateB2BInvoicePDF = (paymentRecord, user, plan, interval) => {
         .moveTo(startX + 100, startY + 10)
         .lineTo(startX + 250, startY + 10)
         .stroke(); // Signature line
-      doc.text("Соломатникова Е. С.", startX + 260, startY);
+      doc.text("ООО АМУЛЕТ КОМПАНИ", startX + 260, startY);
 
       doc.end();
     } catch (error) {
+      console.log(error);
       reject(error);
     }
   });

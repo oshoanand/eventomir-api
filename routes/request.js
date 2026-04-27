@@ -4,6 +4,8 @@ import {
   createPaidRequest,
   getCustomerRequests,
   getRequestsFeed,
+  getRequestById,
+  closeRequest,
 } from "../controllers/request.js";
 
 const router = express.Router();
@@ -25,5 +27,18 @@ router.get("/customer", verifyAuth, getCustomerRequests);
 // GET /api/requests/feed
 // ==========================================
 router.get("/feed", verifyAuth, getRequestsFeed);
+
+// ==========================================
+// 4. GET SINGLE REQUEST (Increments Views)
+// GET /api/requests/:id
+// 🚨 MUST BE AFTER /customer AND /feed!
+// ==========================================
+router.get("/:id", verifyAuth, getRequestById);
+
+// ==========================================
+// 5. CLOSE/ARCHIVE REQUEST (By Customer)
+// PATCH /api/requests/:id/close
+// ==========================================
+router.patch("/:id/close", verifyAuth, closeRequest);
 
 export default router;

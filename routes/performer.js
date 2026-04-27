@@ -5,7 +5,6 @@ import jwt from "jsonwebtoken";
 import { createUploader } from "../utils/multer.js";
 import { verifyAuth } from "../middleware/verify-auth.js";
 import { invalidatePattern } from "../libs/redis.js";
-import { searchPerformers } from "../controllers/search.js";
 
 // --- MinIO Imports ---
 import {
@@ -161,6 +160,7 @@ router.get("/profile/:performerId", optionalAuth, async (req, res) => {
       email: profile.user.email,
       phone: profile.user.phone,
       city: profile.city,
+      address: profile.address,
       description: profile.description,
       accountType: profile.accountType,
       profilePicture: profile.user.image,
@@ -215,6 +215,7 @@ router.patch("/:id", verifyAuth, profileUploadFields, async (req, res) => {
       city,
       phone,
       roles,
+      address,
       priceRange,
       socialLinks,
       bankDetails,
@@ -232,6 +233,7 @@ router.patch("/:id", verifyAuth, profileUploadFields, async (req, res) => {
     const profileUpdate = {
       description,
       city,
+      address,
       roles: parsedRoles,
       priceRange: parsedPriceRange,
       socialLinks: parsedSocialLinks,
@@ -637,8 +639,6 @@ router.get("/batch", async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
-
-router.get("/search", searchPerformers);
 
 // Add Multer Error Handler
 router.use((err, req, res, next) => {
