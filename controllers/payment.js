@@ -157,6 +157,7 @@ export const initiateSubscriptionCheckout = async (req, res) => {
     const companyName = activeProfile.companyName || null;
     const inn = activeProfile.inn || null;
     const city = activeProfile.city || null;
+    const address = activeProfile.address || null;
     const accountType = activeProfile.accountType || user.accountType;
 
     const isB2B =
@@ -219,6 +220,7 @@ export const initiateSubscriptionCheckout = async (req, res) => {
           company_name: companyName, // Mapped back to what the PDF generator expects
           inn: inn,
           city: city,
+          address: address,
         };
 
         const pdfBuffer = await generateB2BInvoicePDF(

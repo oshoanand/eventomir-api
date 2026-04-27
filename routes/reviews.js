@@ -12,10 +12,12 @@ router.post("/", verifyAuth, async (req, res) => {
     const currentUserId = req.user.id;
     const { targetId, rating, comment } = req.body;
 
-    if (!targetId || !rating || rating < 1 || rating > 5) {
+    const numRating = Number(rating);
+
+    if (!targetId || !numRating || numRating < 1 || numRating > 5) {
       return res
         .status(400)
-        .json({ message: "Некорректные данные для отзыва." });
+        .json({ message: "Некорректные данные для отзыва. Оценка от 1 до 5." });
     }
 
     if (currentUserId === targetId) {
@@ -24,7 +26,7 @@ router.post("/", verifyAuth, async (req, res) => {
         .json({ message: "Вы не можете оставить отзыв самому себе." });
     }
 
-    // 1. Fetch Customer Profile (Only customers can leave reviews)
+    // 1. Fetch Customer Profile
     const customerProfile = await prisma.customerProfile.findUnique({
       where: { userId: currentUserId },
     });
@@ -63,7 +65,7 @@ router.post("/", verifyAuth, async (req, res) => {
       data: {
         performerId: performerProfile.id,
         customerId: customerProfile.id,
-        rating: Number(rating),
+        rating: numRating,
         comment: comment || "",
       },
       include: {
@@ -76,17 +78,17 @@ router.post("/", verifyAuth, async (req, res) => {
       },
     });
 
-    // 5. Map database IDs to what the frontend expects
+    // 5. Map safely to what the frontend expects
     const formattedReview = {
       ...newReview,
-      authorId: newReview.customer.userId, // Map to User ID for frontend checks
-      targetId: newReview.performer.userId, // Map to User ID
+      authorId: newReview.customer?.userId,
+      targetId: newReview.performer?.userId,
       author: {
-        id: newReview.customer.user.id,
-        name: newReview.customer.user.name,
-        image: newReview.customer.user.image,
-        profilePicture: newReview.customer.user.image,
-        role: newReview.customer.user.role,
+        id: newReview.customer?.user?.id,
+        name: newReview.customer?.user?.name || "Пользователь",
+        image: newReview.customer?.user?.image,
+        profilePicture: newReview.customer?.user?.image,
+        role: newReview.customer?.user?.role || "customer",
       },
     };
 
@@ -104,7 +106,6 @@ router.get("/target/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // 1. Resolve the Performer Profile
     const performerProfile = await prisma.performerProfile.findUnique({
       where: { userId: userId },
     });
@@ -113,7 +114,6 @@ router.get("/target/:userId", async (req, res) => {
       return res.status(200).json([]); // No profile, no reviews
     }
 
-    // 2. Find all reviews targeted at this performer profile
     const reviews = await prisma.review.findMany({
       where: { performerId: performerProfile.id },
       orderBy: { createdAt: "desc" },
@@ -127,20 +127,19 @@ router.get("/target/:userId", async (req, res) => {
       },
     });
 
-    // 3. Map to frontend expected format
+    // Safely map to frontend format
     const enrichedReviews = reviews.map((review) => {
       const { customer, performer, ...rest } = review;
       return {
         ...rest,
-        authorId: customer.userId, // Crucial for 'isOwnProfile' and 'hasAlreadyReviewed'
-        targetId: performer.userId,
+        authorId: customer?.userId,
+        targetId: performer?.userId,
         author: {
-          id: customer.user.id,
-          name: customer.user.name,
-          image: customer.user.image,
-          profilePicture: customer.user.image,
-          profile_picture: customer.user.image, // Legacy fallback
-          role: customer.user.role,
+          id: customer?.user?.id,
+          name: customer?.user?.name || "Удаленный пользователь",
+          image: customer?.user?.image,
+          profilePicture: customer?.user?.image,
+          role: customer?.user?.role || "customer",
         },
       };
     });
@@ -172,7 +171,6 @@ router.patch("/:reviewId/reply", verifyAuth, async (req, res) => {
       return res.status(404).json({ message: "Отзыв не найден." });
     }
 
-    // Security Check: Ensure the logged in user is the Performer who received the review
     const performerProfile = await prisma.performerProfile.findUnique({
       where: { userId: currentUserId },
     });
@@ -190,7 +188,7 @@ router.patch("/:reviewId/reply", verifyAuth, async (req, res) => {
       data: {
         reply: replyText,
         replyCreatedAt: isEditing ? review.replyCreatedAt : new Date(),
-        replyUpdatedAt: isEditing ? new Date() : null, // Track edit timestamp
+        replyUpdatedAt: isEditing ? new Date() : null,
       },
     });
 
@@ -212,7 +210,6 @@ router.delete("/:reviewId", verifyAuth, async (req, res) => {
     const review = await prisma.review.findUnique({ where: { id: reviewId } });
     if (!review) return res.status(404).json({ message: "Отзыв не найден." });
 
-    // Security Check: Only the original author (Customer) can delete it
     const customerProfile = await prisma.customerProfile.findUnique({
       where: { userId: currentUserId },
     });
@@ -223,7 +220,7 @@ router.delete("/:reviewId", verifyAuth, async (req, res) => {
         .json({ message: "Вы можете удалять только свои отзывы." });
     }
 
-    // 🚨 CRITICAL BUSINESS LOGIC: Prevent deletion if the performer has already replied
+    // CRITICAL: Prevent deletion if the performer has already replied
     if (review.reply && review.reply.trim() !== "") {
       return res.status(403).json({
         message:
@@ -231,9 +228,12 @@ router.delete("/:reviewId", verifyAuth, async (req, res) => {
       });
     }
 
-    await prisma.review.delete({ where: { id: reviewId } });
+    // 🚨 FIX: Use deleteMany to avoid P2025 errors on double-click
+    await prisma.review.deleteMany({
+      where: { id: reviewId, customerId: customerProfile.id },
+    });
 
-    res.status(200).json({ message: "Отзыв успешно удален." });
+    res.status(200).json({ success: true, message: "Отзыв успешно удален." });
   } catch (error) {
     console.error("Delete Review Error:", error);
     res.status(500).json({ message: "Не удалось удалить отзыв." });
@@ -254,7 +254,6 @@ router.patch("/:reviewId", verifyAuth, async (req, res) => {
       return res.status(404).json({ message: "Отзыв не найден." });
     }
 
-    // Security Check: Only the original author (Customer) can edit their review
     const customerProfile = await prisma.customerProfile.findUnique({
       where: { userId: currentUserId },
       include: {
@@ -268,16 +267,16 @@ router.patch("/:reviewId", verifyAuth, async (req, res) => {
         .json({ message: "Вы можете редактировать только свои отзывы." });
     }
 
-    // Validation
-    if (rating && (rating < 1 || rating > 5)) {
+    // 🚨 FIX: Strict number coercion for validation
+    const numRating = rating ? Number(rating) : undefined;
+    if (numRating && (numRating < 1 || numRating > 5)) {
       return res.status(400).json({ message: "Оценка должна быть от 1 до 5." });
     }
 
-    // 1. Update the review in the database
     const updatedReview = await prisma.review.update({
       where: { id: reviewId },
       data: {
-        ...(rating && { rating: Number(rating) }),
+        ...(numRating && { rating: numRating }),
         ...(comment !== undefined && { comment }),
       },
       include: {
@@ -285,17 +284,16 @@ router.patch("/:reviewId", verifyAuth, async (req, res) => {
       },
     });
 
-    // 2. Format output matching the GET request mapping
     const formattedReview = {
       ...updatedReview,
       authorId: customerProfile.userId,
-      targetId: updatedReview.performer.userId,
+      targetId: updatedReview.performer?.userId,
       author: {
-        id: customerProfile.user.id,
-        name: customerProfile.user.name,
-        image: customerProfile.user.image,
-        profilePicture: customerProfile.user.image,
-        role: customerProfile.user.role,
+        id: customerProfile.user?.id,
+        name: customerProfile.user?.name || "Пользователь",
+        image: customerProfile.user?.image,
+        profilePicture: customerProfile.user?.image,
+        role: customerProfile.user?.role || "customer",
       },
     };
 
@@ -319,7 +317,6 @@ router.delete("/:reviewId/reply", verifyAuth, async (req, res) => {
       return res.status(404).json({ message: "Отзыв не найден." });
     }
 
-    // Security Check: Only the Performer who replied can delete the reply
     const performerProfile = await prisma.performerProfile.findUnique({
       where: { userId: currentUserId },
     });
@@ -330,7 +327,7 @@ router.delete("/:reviewId/reply", verifyAuth, async (req, res) => {
         .json({ message: "Вы можете удалять только свои ответы." });
     }
 
-    // Update the review to remove the reply text and timestamps
+    // Update the review to remove the reply
     await prisma.review.update({
       where: { id: reviewId },
       data: {
@@ -340,7 +337,7 @@ router.delete("/:reviewId/reply", verifyAuth, async (req, res) => {
       },
     });
 
-    res.status(200).json({ message: "Ответ успешно удален." });
+    res.status(200).json({ success: true, message: "Ответ успешно удален." });
   } catch (error) {
     console.error("Delete Reply Error:", error);
     res.status(500).json({ message: "Не удалось удалить ответ." });

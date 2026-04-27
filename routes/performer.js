@@ -558,7 +558,7 @@ router.post(
         data: {
           performerId: profile.id,
           title: title || "Новый трек",
-          fileUrl: `${MINIO_PUBLIC_URL}/${MINIO_BUCKET_NAME}/${fileKey}`,
+          fileUrl: `${MINIO_PUBLIC_URL}/${fileKey}`,
         },
       });
 
