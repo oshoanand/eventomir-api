@@ -3,14 +3,20 @@ import "dotenv/config";
 
 const DEFAULT_TTL = 3600 * 24 * 2; // 2 days
 
-// 1. Shared Redis Configuration
+// ==========================================
+// 1. SHARED REDIS CONFIGURATION
+// ==========================================
 const redisOptions = {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: Number(process.env.REDIS_PORT) || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
+  // 🚨 CRITICAL: Prevents commands from hanging forever if Redis drops mid-flight
+  maxRetriesPerRequest: 3,
   retryStrategy(times) {
     if (times > 5) {
-      console.warn("⚠️ Redis is unreachable. Switching to DB-only mode.");
+      console.warn(
+        "⚠️ Redis is unreachable. Switching to DB-only fallback mode.",
+      );
       return null; // Stop retrying after 5 attempts
     }
     // Exponential backoff strategy
@@ -29,7 +35,7 @@ export const redis = new Redis(redisOptions);
 export const pubClient = new Redis(redisOptions);
 export const subClient = pubClient.duplicate();
 
-// Centralized Constants (Optional, but good for standardization)
+// Centralized Constants
 export const CHANNELS = {
   EVENTS: "app_events_stream",
 };
@@ -41,6 +47,7 @@ export const KEYS = {
 // ==========================================
 // 3. ERROR HANDLING
 // ==========================================
+// Using .on("error") prevents Node.js from crashing on unhandled socket errors
 redis.on("error", (err) =>
   console.error("Redis Main Client Error:", err.message),
 );
@@ -56,19 +63,29 @@ subClient.on("error", (err) =>
 // ==========================================
 export const connectRedis = async () => {
   try {
-    const status = await redis.ping();
-    console.log(
-      `✅ Main Redis Connection: ${status === "PONG" ? "Healthy" : "Unstable"}`,
-    );
+    // Only ping if the connection hasn't permanently failed
+    if (redis.status === "ready" || redis.status === "connecting") {
+      const status = await redis.ping();
+      console.log(
+        `✅ Main Redis Connection: ${status === "PONG" ? "Healthy" : "Unstable"}`,
+      );
+    }
 
-    // Wait for Pub/Sub clients to be ready if they aren't already
+    // Wait for Pub/Sub clients to be ready
     const waitForClient = (client) => {
       if (client.status === "ready") return Promise.resolve();
-      return new Promise((resolve) => client.once("ready", resolve));
+      // Add a timeout so bootstrapper doesn't hang forever if Redis is offline on startup
+      return new Promise((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        client.once("ready", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     };
 
     await Promise.all([waitForClient(pubClient), waitForClient(subClient)]);
-    console.log("✅ Redis Pub/Sub clients ready for WebSockets");
+    console.log("✅ Redis Bootstrapper completed.");
   } catch (err) {
     console.error("❌ Redis Connection Failed:", err.message);
   }
@@ -82,7 +99,7 @@ export const connectRedis = async () => {
  * Helper to explicitly invalidate specific cache keys
  */
 export const invalidateKeys = async (keys) => {
-  if (!keys || keys.length === 0) return;
+  if (!keys || keys.length === 0 || redis.status !== "ready") return;
 
   const keysToDelete = Array.isArray(keys) ? keys : [keys];
 
@@ -95,9 +112,13 @@ export const invalidateKeys = async (keys) => {
 };
 
 /**
- * Invalidate by Pattern (Useful for Pagination or Lists, e.g., 'users:*')
+ * Invalidate by Pattern (Useful for Search queries, Pagination, e.g., 'search:performers:*')
+ * Aliased as invalidateCachePattern for cross-compatibility with other files.
  */
 export const invalidatePattern = async (pattern) => {
+  // 🚨 CRITICAL: Prevent hanging if Redis is offline
+  if (redis.status !== "ready") return;
+
   try {
     let cursor = "0";
     do {
@@ -123,39 +144,63 @@ export const invalidatePattern = async (pattern) => {
   }
 };
 
+export const invalidateCachePattern = invalidatePattern; // Alias
+
 /**
- * Generic Read-Through Cache Logic
- * Attempts to fetch from Redis first; if miss, executes the DB query, caches the result, and returns it.
+ * Generic Read-Through Cache Logic (Highly Resilient)
+ * Attempts to fetch from Redis first; if miss OR Redis is down, executes DB query.
  */
 export const fetchCached = async (resource, id, dbQuery, ttl = DEFAULT_TTL) => {
-  const key = `${resource}:${id}`;
+  const key = id ? `${resource}:${id}` : resource;
 
   try {
-    const cachedData = await redis.get(key);
+    // 🚨 CRITICAL: Check status BEFORE calling .get() to bypass ioredis offline queueing
+    if (redis.status === "ready") {
+      const cachedData = await redis.get(key);
 
-    if (cachedData) {
-      console.log(`--- Cache Hit: ${key} ---`);
-      return JSON.parse(cachedData);
+      if (cachedData) {
+        // console.log(`--- Cache Hit: ${key} ---`); // Uncomment for debugging
+        return JSON.parse(cachedData);
+      }
     }
+  } catch (error) {
+    console.warn(
+      `⚠️ Redis Read Error on ${key}. Bypassing cache:`,
+      error.message,
+    );
+  }
 
-    console.log(`--- Cache Miss: ${key}. Fetching from DB ---`);
-    const data = await dbQuery();
+  // Cache Miss OR Redis is offline: Fetch directly from Database
+  // console.log(`--- Cache Miss: ${key}. Fetching from DB ---`);
+  const data = await dbQuery();
 
-    if (data) {
+  try {
+    // 🚨 CRITICAL: Check status BEFORE calling .set() so it doesn't queue in memory
+    if (data && redis.status === "ready") {
       await redis.set(key, JSON.stringify(data), "EX", ttl);
     }
-
-    return data;
   } catch (error) {
-    console.error(`Redis Error on ${key}:`, error);
-    return await dbQuery(); // Fail-soft: fallback to DB without caching
+    console.warn(
+      `⚠️ Redis Write Error on ${key}. Data not cached:`,
+      error.message,
+    );
   }
+
+  return data;
 };
 
 /**
  * Generates a unique 2-digit code backed by Redis expiry.
  */
 export async function generateUniqueCode() {
+  // Fallback if Redis is completely down (useful for dev environments or outages)
+  if (redis.status !== "ready") {
+    console.warn("Redis is offline. Generating unsafe random code.");
+    return Math.floor(Math.random() * 100)
+      .toString()
+      .padStart(2, "0");
+  }
+
   let isUnique = false;
   let randomCode;
   const EXPIRY_IN_SECONDS = 2 * 24 * 60 * 60; // 2 Days
@@ -182,10 +227,12 @@ export async function generateUniqueCode() {
       "NX",
     );
 
-    console.log(`Successfully generated and saved unique code: ${randomCode}`);
     return randomCode;
   } catch (error) {
-    console.error("Redis Unique Code error:", error);
-    return null;
+    console.error("Redis Unique Code error:", error.message);
+    // Ultimate fallback
+    return Math.floor(Math.random() * 100)
+      .toString()
+      .padStart(2, "0");
   }
 }

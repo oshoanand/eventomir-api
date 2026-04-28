@@ -98,7 +98,7 @@ async function initializeExpressServer() {
 
   // 🚨 APPLY GLOBAL RATE LIMITER
   // This must be placed here so it protects the body parsers and all routes below
-  app.use(globalRateLimiter);
+  // app.use(globalRateLimiter);
 
   // --- Standard Express Middleware for all other routes ---
   app.use(express.json());

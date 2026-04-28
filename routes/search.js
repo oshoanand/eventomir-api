@@ -4,6 +4,51 @@ import { fetchCached } from "../libs/redis.js";
 
 const router = express.Router();
 
+/**
+ * Formats a user string for PostgreSQL Full Text Search (GIN).
+ * Prevents DB crashes by stripping invalid TSVector characters,
+ * removes stop words, and formats for prefix OR matching.
+ */
+const formatFtsQuery = (query) => {
+  if (!query) return undefined;
+
+  const sanitized = query
+    .trim()
+    .replace(/[^a-zA-Zа-яА-Я0-9\s\-]+/g, " ") // Keep letters, numbers, and hyphens
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!sanitized) return undefined;
+
+  // Remove common Russian stop words so they don't corrupt the search
+  const stopWords = new Set([
+    "в",
+    "во",
+    "на",
+    "для",
+    "с",
+    "и",
+    "или",
+    "по",
+    "к",
+    "до",
+    "от",
+    "за",
+    "о",
+    "об",
+  ]);
+
+  const words = sanitized
+    .split(" ")
+    .filter((w) => !stopWords.has(w.toLowerCase()) && w.length > 1);
+
+  if (words.length === 0) return undefined;
+
+  // Join words with '|' (OR) and add ':*' for prefix matching
+  // Example: "свадебная фотосъемка" -> "свадебная:* | фотосъемка:*"
+  return words.map((w) => `${w}:*`).join(" | ");
+};
+
 router.get("/performers", async (req, res) => {
   try {
     const {
@@ -19,54 +64,62 @@ router.get("/performers", async (req, res) => {
       query: textQuery,
     } = req.query;
 
+    // 1. Create a Deterministic Cache Key (Alphabetical sort ignores param order)
     const sortedQuery = Object.keys(req.query)
       .sort()
       .reduce((acc, key) => {
-        acc[key] = req.query[key];
+        if (req.query[key]) acc[key] = req.query[key];
         return acc;
       }, {});
 
     const cacheParams = new URLSearchParams(sortedQuery).toString() || "all";
 
+    // 2. The Database Query Callback
     const dbQuery = async () => {
       const where = {
         moderationStatus: "APPROVED",
       };
 
-      // 1. Roles Filtering (Category + SubCategories combined)
+      // --- FILTERS ---
+
+      // Category & Subcategory Filter (Native GIN Array intersection)
       const roleFilters = [];
       if (category && category !== "_all_") roleFilters.push(category);
       if (subCategories) roleFilters.push(...subCategories.split(","));
 
       if (roleFilters.length > 0) {
-        // 🚨 FIX: Used hasSome to match any of the selected categories/subcategories
         where.roles = { hasSome: roleFilters };
       }
 
-      // 2. City Filtering
+      // City Filter (Postgres GIN Trigram Search)
       if (city && city.length > 1) {
-        // 🚨 FIX: Changed 'equals' to 'contains' for better UX and partial matching
-        where.city = { contains: city, mode: "insensitive" };
+        const formattedCity = formatFtsQuery(city);
+        if (formattedCity) {
+          where.city = { search: formattedCity };
+        }
       }
 
-      // 3. Account Type Filtering
+      // Account Type Filter
       if (accountType && accountType !== "all") {
         where.accountType = accountType;
       }
 
-      // 4. Global Text Search
+      // Global Text Search (Search across Name, Description, and Company Name using GIN)
       if (textQuery && textQuery.length > 1) {
-        where.OR = [
-          { user: { name: { contains: textQuery, mode: "insensitive" } } },
-          { description: { contains: textQuery, mode: "insensitive" } },
-          { companyName: { contains: textQuery, mode: "insensitive" } },
-        ];
+        const formattedQuery = formatFtsQuery(textQuery);
+        if (formattedQuery) {
+          where.OR = [
+            { user: { name: { search: formattedQuery } } },
+            { description: { search: formattedQuery } },
+            { companyName: { search: formattedQuery } },
+          ];
+        }
       }
 
-      // 5. VIP Filtering
+      // VIP Filter
       if (onlyVip === "true") {
         where.user = {
-          ...where.user, // Preserve existing user filters (like the text search above)
+          ...where.user, // Important: Preserve existing user filters (like Name search)
           subscriptions: {
             some: {
               plan: { tier: "PREMIUM" },
@@ -76,9 +129,11 @@ router.get("/performers", async (req, res) => {
         };
       }
 
+      // --- PAGINATION ---
       const skip = (parseInt(page) - 1) * parseInt(pageSize);
       const take = parseInt(pageSize);
 
+      // --- EXECUTE TRANSACTIONS IN PARALLEL ---
       const [profiles, total] = await prisma.$transaction([
         prisma.performerProfile.findMany({
           where,
@@ -96,7 +151,6 @@ router.get("/performers", async (req, res) => {
                 },
               },
             },
-            // 🚨  Include reviews to calculate the average rating for the card stars
             reviewsReceived: { select: { rating: true } },
           },
           orderBy: {
@@ -106,21 +160,24 @@ router.get("/performers", async (req, res) => {
         prisma.performerProfile.count({ where }),
       ]);
 
-      // Post-process Price Filtering
+      // --- POST-PROCESS: PRICE FILTERING ---
+      // We do this in-memory because Prisma doesn't perfectly support range checks inside Int[] columns yet
       let filteredProfiles = profiles;
       if (priceMin || priceMax) {
         filteredProfiles = profiles.filter((p) => {
           if (!p.priceRange || p.priceRange.length === 0) return false;
+
           const minP = p.priceRange[0];
           const maxP = p.priceRange[1] || p.priceRange[0];
 
           if (priceMin && maxP < parseInt(priceMin)) return false;
           if (priceMax && minP > parseInt(priceMax)) return false;
+
           return true;
         });
       }
 
-      // Map to Frontend format exactly as expected by your new UI
+      // --- MAP TO FRONTEND DTO ---
       const formattedItems = filteredProfiles.map((p) => {
         // Calculate average rating safely
         const totalRating =
@@ -131,21 +188,17 @@ router.get("/performers", async (req, res) => {
             : null;
 
         return {
-          id: p.user.id, // Base User ID for routing
+          id: p.user.id, // Base User ID for routing and Chat
           name: p.user.name,
           city: p.city,
           profilePicture: p.user.image,
-
-          // 🚨 ADDED: Missing fields required by your newly enhanced frontend cards
           backgroundPicture: p.backgroundPicture,
           socialLinks: p.socialLinks || {},
           averageRating: avgRating,
           moderationStatus: p.moderationStatus,
-
           roles: p.roles || [],
           priceRange: p.priceRange || [],
           description: p.description,
-
           isVip:
             p.user.subscriptions?.some((sub) => sub.plan.tier === "PREMIUM") ||
             false,
@@ -153,14 +206,19 @@ router.get("/performers", async (req, res) => {
         };
       });
 
+      // Recalculate total if we filtered by price in-memory
+      const finalTotal = priceMin || priceMax ? filteredProfiles.length : total;
+
       return {
         items: formattedItems,
-        total: priceMin || priceMax ? filteredProfiles.length : total,
+        total: finalTotal,
         page: parseInt(page),
         pageSize: take,
       };
     };
 
+    // 3. Execute via Redis Cache Layer (300 seconds = 5 mins TTL)
+    // If Redis is offline, the fetchCached utility safely executes dbQuery() directly
     const result = await fetchCached(
       "search:performers",
       cacheParams,

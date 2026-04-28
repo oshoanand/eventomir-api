@@ -5,11 +5,12 @@
 generator client {
   provider        = "prisma-client"
   output          = "../generated/prisma"
-  previewFeatures = ["views"]
+  previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [pg_trgm]
 }
 
 // ==========================================
@@ -264,6 +265,47 @@ model CustomerProfile {
   @@map("customer_profiles")
 }
 
+// model PerformerProfile {
+//   id     String @id @default(cuid())
+//   userId String @unique @map("user_id")
+//   user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+//   companyName       String?  @map("company_name")
+//   inn               String?
+//   description       String?  @db.Text
+//   experience        String?
+//   priceRange        Int[]    @map("price_range")
+//   city              String?
+//   address           String?
+//   roles             String[]
+//   accountType       String?  @map("account_type")
+//   backgroundPicture String?  @map("background_picture")
+//   moderationStatus  Status   @default(PENDING) @map("moderation_status")
+
+//   reviewsReceived Review[]               @relation("PerformerReviews")
+//   galleryItems    GalleryItem[]
+//   certificates    Certificate[]
+//   audioTracks     AudioTrack[]
+//   eventsHosted    Event[]                @relation("HostedEvents")
+//   recommendations RecommendationLetter[]
+//   favoritedBy     Favorite[]             @relation("PerformerFavorites")
+
+//   socialLinks Json? @default("{}") @map("social_links")
+//   bankDetails Json? @default("[]") @map("bank_details")
+
+//   feedPosts FeedPost[]
+
+//   bookedDates      DateTime[]       @map("booked_dates")
+//   bookingsReceived BookingRequest[] @relation("PerformerBookings")
+
+//   @@index([city], type: Gin)
+//   @@index([priceRange], type: Gin)
+//   @@index([description], type: Gin)
+//   @@index([roles], type: Gin)
+
+//   @@map("performer_profiles")
+// }
+
 model PerformerProfile {
   id     String @id @default(cuid())
   userId String @unique @map("user_id")
@@ -297,8 +339,13 @@ model PerformerProfile {
   bookedDates      DateTime[]       @map("booked_dates")
   bookingsReceived BookingRequest[] @relation("PerformerBookings")
 
-  @@index([city])
-  @@index([moderationStatus])
+  // ✅ Arrays use native GIN
+  @@index([roles], type: Gin)
+  @@index([priceRange], type: Gin)
+  // ✅ Strings MUST use the trigram operator class
+  @@index([city(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("performer_profiles")
 }
 

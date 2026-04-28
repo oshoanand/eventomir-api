@@ -25,55 +25,65 @@ const createAuditLog = async (
 router.post("/", verifyAuth, async (req, res) => {
   try {
     const { performerId, date, details } = req.body;
-    const customerId = req.user.id;
-    console.log(req.body);
-    console.log(req.user.id);
+    const baseUserId = req.user.id;
 
-    if (performerId === customerId)
+    if (performerId === baseUserId) {
       return res
         .status(403)
         .json({ message: "Отказ: бронирование самого себя." });
+    }
+
+    // 🚨 FIX: Fetch the Customer Profile to get the correct 'customerId' for the Booking record
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId: baseUserId },
+    });
+
+    if (!customerProfile) {
+      return res
+        .status(403)
+        .json({
+          message: "Профиль заказчика не найден. Завершите регистрацию.",
+        });
+    }
 
     const performer = await prisma.performerProfile.findUnique({
       where: { userId: performerId },
     });
-    // console.log(performer);
 
-    if (!performer)
+    if (!performer) {
       return res.status(404).json({ message: "Исполнитель не найден." });
+    }
 
-    // Block overlapping requests
-    const isBusy = performer.bookedDates.some(
-      (d) =>
-        new Date(d).toISOString().split("T")[0] ===
-        new Date(date).toISOString().split("T")[0],
-    );
-    console.log(isBusy);
+    // 🚨 FIX: Safely check dates, ensuring bookedDates is an array to prevent crashes
+    const isBusy = performer.bookedDates?.some((d) => {
+      const bookedDate = new Date(d).toISOString().split("T")[0];
+      const requestDate = new Date(date).toISOString().split("T")[0];
+      return bookedDate === requestDate;
+    });
+
     if (isBusy) return res.status(400).json({ message: "Дата уже занята." });
 
     const booking = await prisma.$transaction(async (tx) => {
       const newBooking = await tx.bookingRequest.create({
         data: {
           performerId: performer.id,
-          customerId,
+          customerId: customerProfile.id, // 🚨 FIX: Used Profile ID, not User ID
           date: new Date(date),
           details: details,
           status: "PENDING_PERFORMER_APPROVAL",
         },
       });
 
-      await createAuditLog(tx, newBooking.id, customerId, "REQUEST_CREATED", {
+      await createAuditLog(tx, newBooking.id, baseUserId, "REQUEST_CREATED", {
         details,
         date,
       });
       return newBooking;
     });
 
-    console.log(booking);
-    // 🚨 NOTIFY PERFORMER: New Booking Request
-    // Run asynchronously (without await) so it doesn't block the HTTP response
+    // Run asynchronously without blocking the HTTP response
     notifyUser({
-      userId: performer.userId, // Target the base user ID of the performer
+      userId: performer.userId, // 🚨 Ensure this hits the base User ID for sockets
       title: "📅 Новый запрос на бронирование",
       body: "У вас новый запрос на бронирование. Проверьте детали и укажите вашу цену.",
       type: "NEW_BOOKING",
@@ -94,20 +104,29 @@ router.get("/my", verifyAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Fetch bookings made by the logged-in user
-    const madeRaw = await prisma.bookingRequest.findMany({
-      where: { customerId: userId },
-      include: {
-        performer: {
-          include: {
-            user: { select: { name: true, image: true } },
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
+    // 1. Resolve profiles for the logged-in user
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { userId },
+    });
+    const performerProfile = await prisma.performerProfile.findUnique({
+      where: { userId },
     });
 
-    // Map the city from the profile into the user object for the frontend
+    // 2. Fetch bookings made by the user (if they have a customer profile)
+    let madeRaw = [];
+    if (customerProfile) {
+      madeRaw = await prisma.bookingRequest.findMany({
+        where: { customerId: customerProfile.id },
+        include: {
+          performer: {
+            include: { user: { select: { name: true, image: true } } },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+
+    // Map fields cleanly for the frontend
     const made = madeRaw.map((booking) => {
       if (booking.performer) {
         return {
@@ -124,23 +143,38 @@ router.get("/my", verifyAuth, async (req, res) => {
       return booking;
     });
 
-    // Check if the user is a performer to fetch received bookings
-    const performerProfile = await prisma.performerProfile.findUnique({
-      where: { userId },
-    });
-
-    let received = [];
+    // 3. Fetch bookings received (if they have a performer profile)
+    let receivedRaw = [];
     if (performerProfile) {
-      received = await prisma.bookingRequest.findMany({
+      receivedRaw = await prisma.bookingRequest.findMany({
         where: { performerId: performerProfile.id },
+        // 🚨 FIX: Customer details live on the User table, so we must include 'user'
         include: {
           customer: {
-            select: { name: true, email: true, image: true, phone: true },
+            include: {
+              user: {
+                select: { name: true, email: true, image: true, phone: true },
+              },
+            },
           },
         },
         orderBy: { createdAt: "desc" },
       });
     }
+
+    // Safely flatten the customer data for the frontend mapping
+    const received = receivedRaw.map((booking) => ({
+      ...booking,
+      customer: booking.customer
+        ? {
+            ...booking.customer,
+            name: booking.customer.user?.name,
+            email: booking.customer.user?.email,
+            image: booking.customer.user?.image,
+            phone: booking.customer.user?.phone,
+          }
+        : null,
+    }));
 
     res.status(200).json({
       made,
@@ -162,19 +196,21 @@ router.patch("/:id/performer-reply", verifyAuth, async (req, res) => {
     const { action, agreedFee, rejectionReason } = req.body;
     const userId = req.user.id;
 
+    // 🚨 FIX: Include both Performer AND Customer to access their base User IDs
     const booking = await prisma.bookingRequest.findUnique({
       where: { id },
-      include: { performer: true },
+      include: { performer: true, customer: true },
     });
 
     if (!booking)
       return res.status(404).json({ message: "Бронирование не найдено." });
     if (booking.performer.userId !== userId)
       return res.status(403).json({ message: "Доступ запрещен." });
-    if (booking.status !== "PENDING_PERFORMER_APPROVAL")
+    if (booking.status !== "PENDING_PERFORMER_APPROVAL") {
       return res
         .status(400)
         .json({ message: "Статус бронирования не позволяет этот ответ." });
+    }
 
     await prisma.$transaction(async (tx) => {
       if (action === "REJECT") {
@@ -202,10 +238,10 @@ router.patch("/:id/performer-reply", verifyAuth, async (req, res) => {
       }
     });
 
-    // 🚨 NOTIFY CUSTOMER: Performer's decision
+    // 🚨 FIX: Use 'booking.customer.userId' (Base User ID) to send the notification
     if (action === "REJECT") {
       notifyUser({
-        userId: booking.customerId,
+        userId: booking.customer.userId,
         title: "❌ Бронирование отклонено",
         body: `Исполнитель не смог принять ваш заказ. Причина: ${rejectionReason}`,
         type: "BOOKING_REJECTED",
@@ -213,7 +249,7 @@ router.patch("/:id/performer-reply", verifyAuth, async (req, res) => {
       }).catch(console.error);
     } else if (action === "ACCEPT") {
       notifyUser({
-        userId: booking.customerId,
+        userId: booking.customer.userId,
         title: "✅ Бронирование подтверждено!",
         body: `Исполнитель готов выполнить заказ. Ожидается оплата: ${agreedFee} ₽.`,
         type: "BOOKING_ACCEPTED",
@@ -233,28 +269,34 @@ router.patch("/:id/performer-reply", verifyAuth, async (req, res) => {
 router.patch("/:id/customer-cancel", verifyAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const baseUserId = req.user.id;
 
-    // Include the performer so we can get their base userId to notify them
     const booking = await prisma.bookingRequest.findUnique({
       where: { id },
-      include: { performer: true },
+      include: { performer: true, customer: true },
     });
 
-    if (!booking || booking.customerId !== userId)
+    if (!booking)
+      return res.status(404).json({ message: "Бронирование не найдено." });
+
+    // 🚨 FIX: Verify ownership against the Customer Profile, not the base User ID
+    if (booking.customer.userId !== baseUserId) {
       return res.status(403).json({ message: "Доступ запрещен." });
-    if (booking.status !== "PENDING_CUSTOMER_PAYMENT")
+    }
+
+    if (booking.status !== "PENDING_CUSTOMER_PAYMENT") {
       return res.status(400).json({ message: "Неверный статус." });
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.bookingRequest.update({
         where: { id },
         data: { status: "CANCELLED_BY_CUSTOMER" },
       });
-      await createAuditLog(tx, id, userId, "CUSTOMER_DECLINED_FEE");
+      await createAuditLog(tx, id, baseUserId, "CUSTOMER_DECLINED_FEE");
     });
 
-    // 🚨 NOTIFY PERFORMER: Deal Cancelled
+    // Notify Performer
     notifyUser({
       userId: booking.performer.userId,
       title: "🚫 Бронирование отменено",
@@ -275,17 +317,27 @@ router.patch("/:id/customer-cancel", verifyAuth, async (req, res) => {
 router.post("/:id/pay", verifyAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const baseUserId = req.user.id;
 
+    // 🚨 FIX: Include the deeply nested 'user' relation to extract the customer's email
     const booking = await prisma.bookingRequest.findUnique({
       where: { id },
-      include: { customer: true },
+      include: {
+        customer: { include: { user: true } },
+      },
     });
 
-    if (!booking || booking.customerId !== userId)
+    if (!booking)
+      return res.status(404).json({ message: "Бронирование не найдено." });
+
+    // Verify ownership
+    if (booking.customer.userId !== baseUserId) {
       return res.status(403).json({ message: "Доступ запрещен." });
-    if (booking.status !== "PENDING_CUSTOMER_PAYMENT")
+    }
+
+    if (booking.status !== "PENDING_CUSTOMER_PAYMENT") {
       return res.status(400).json({ message: "Ожидается оплата." });
+    }
 
     const totalAmount = booking.agreedFee;
     const platformFee = totalAmount * 0.1; // 10% Platform fee
@@ -300,22 +352,22 @@ router.post("/:id/pay", verifyAuth, async (req, res) => {
           netAmount,
           escrowStatus: "AWAITING_PAYMENT",
           provider: "TINKOFF_ESCROW",
-          userId,
+          userId: baseUserId,
           bookingId: id,
           metadata: { type: "BOOKING_ESCROW", bookingId: id },
         },
       });
 
-      // 2. Initialize Tinkoff (Throws error if it fails, aborting transaction)
+      // 2. Initialize Tinkoff
       const { paymentUrl } = await initTinkoffEscrowPayment(
         paymentRecord.id,
         totalAmount,
         booking.id,
-        booking.customer.email,
+        booking.customer.user.email, // 🚨 FIX: Safe access to deeply nested email
       );
 
       // 3. Log the action
-      await createAuditLog(tx, id, userId, "CUSTOMER_INITIATED_PAYMENT", {
+      await createAuditLog(tx, id, baseUserId, "CUSTOMER_INITIATED_PAYMENT", {
         paymentId: paymentRecord.id,
       });
 

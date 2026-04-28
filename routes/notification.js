@@ -15,20 +15,21 @@ router.get("/unread-count", verifyAuth, async (req, res) => {
         isRead: false,
       },
     });
-    res.json({ unreadCount: count });
+    return res.status(200).json({ unreadCount: count });
   } catch (error) {
     console.error("Fetch Unread Count Error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    return res.status(500).json({ message: "Internal server error" });
   }
 });
 
 // ==========================================
-// 2. GET ALL NOTIFICATIONS (With Limit)
+// 2. GET ALL NOTIFICATIONS (With Safe Limits)
 // ==========================================
 router.get("/", verifyAuth, async (req, res) => {
   try {
-    // 🚨 FIX: Added a limit so the DB doesn't crash when a user has 10,000+ alerts
-    const limit = parseInt(req.query.limit) || 50;
+    // 🚨 FIX: Enforce a strict maximum limit of 100 to prevent DB Denial-of-Service attacks
+    const requestedLimit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(requestedLimit, 100);
 
     const notifications = await prisma.notification.findMany({
       where: { userId: req.user.id },
@@ -37,10 +38,10 @@ router.get("/", verifyAuth, async (req, res) => {
     });
 
     // Returning array directly to match your existing frontend expectations
-    res.json(notifications);
+    return res.status(200).json(notifications);
   } catch (error) {
     console.error("Fetch Notifications Error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    return res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -56,10 +57,11 @@ router.patch("/read-all", verifyAuth, async (req, res) => {
       },
       data: { isRead: true },
     });
-    res.json({ success: true });
+
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error("Read All Error:", error);
-    res.status(500).json({ message: "Error updating notifications" });
+    return res.status(500).json({ message: "Error updating notifications" });
   }
 });
 
@@ -71,10 +73,13 @@ router.delete("/clear-all", verifyAuth, async (req, res) => {
     await prisma.notification.deleteMany({
       where: { userId: req.user.id },
     });
-    res.json({ success: true, message: "History cleared successfully" });
+
+    return res
+      .status(200)
+      .json({ success: true, message: "History cleared successfully" });
   } catch (error) {
     console.error("Clear All Error:", error);
-    res.status(500).json({ message: "Error clearing notifications" });
+    return res.status(500).json({ message: "Error clearing notifications" });
   }
 });
 
@@ -83,11 +88,14 @@ router.delete("/clear-all", verifyAuth, async (req, res) => {
 // ==========================================
 router.patch("/:id/read", verifyAuth, async (req, res) => {
   try {
+    const { id } = req.params;
+
     // SECURITY: updateMany securely applies the userId check
     const result = await prisma.notification.updateMany({
       where: {
-        id: req.params.id,
+        id: id,
         userId: req.user.id,
+        isRead: false, // Prevents unnecessary database writes if already read
       },
       data: { isRead: true },
     });
@@ -95,13 +103,15 @@ router.patch("/:id/read", verifyAuth, async (req, res) => {
     if (result.count === 0) {
       return res
         .status(404)
-        .json({ message: "Notification not found or unauthorized" });
+        .json({
+          message: "Notification not found, already read, or unauthorized",
+        });
     }
 
-    res.json({ success: true });
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error("Read Notification Error:", error);
-    res.status(500).json({ message: "Error updating notification" });
+    return res.status(500).json({ message: "Error updating notification" });
   }
 });
 
@@ -110,9 +120,11 @@ router.patch("/:id/read", verifyAuth, async (req, res) => {
 // ==========================================
 router.delete("/:id", verifyAuth, async (req, res) => {
   try {
+    const { id } = req.params;
+
     const result = await prisma.notification.deleteMany({
       where: {
-        id: req.params.id,
+        id: id,
         userId: req.user.id,
       },
     });
@@ -123,10 +135,10 @@ router.delete("/:id", verifyAuth, async (req, res) => {
         .json({ message: "Notification not found or unauthorized" });
     }
 
-    res.json({ success: true });
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error("Delete Notification Error:", error);
-    res.status(500).json({ message: "Error deleting notification" });
+    return res.status(500).json({ message: "Error deleting notification" });
   }
 });
 
